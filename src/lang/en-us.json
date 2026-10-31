@@ -1,0 +1,17 @@
+{
+  "error.unknown_node_type": "Unknown dialogue node type: \"%s\"",
+  "ui.send": "Send",
+  "item.notepad": "Notepad",
+  "item.docfile": "Document File",
+  "content.demo_docfile_1": "<div>Demo Text</div>",
+  "ui.continue": "Continue",
+  "ui.reply": "Your reply",
+  "ui.contacts": "Contacts",
+  "ui.no_engine": "No game engine attached.",
+  "ui.no_contacts": "No contacts unlocked yet.",
+  "ui.other_dialogue_active": "Finish the active conversation with another contact before starting a new one.",
+  "ui.empty_input": "Enter a reply first.",
+  "ui.input_retry": "No keyword matched. Try another reply.",
+  "ui.start_dialogue": "Start: %s",
+  "ui.no_dialogues": "No conversations available."
+}

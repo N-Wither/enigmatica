@@ -1,0 +1,16 @@
+[
+  {
+    "id": "notepad",
+    "name": "translate:item.notepad",
+    "element": "eg-notepad"
+  },
+  {
+    "id": "docfile",
+    "name": "translate:item.docfile",
+    "element": "eg-docfile",
+    "defaultState": {
+      "head": "translate:item.docfile",
+      "content": ""
+    }
+  }
+]

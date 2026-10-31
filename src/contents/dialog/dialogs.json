@@ -1,0 +1,108 @@
+[
+  {
+    "id": "greetings",
+    "characterId": "aac",
+    "startNode": "hello",
+    "repeatable": false,
+    "nodes": {
+      "hello": {
+        "type": "message",
+        "speaker": "aac",
+        "text": "你好。档案室里留有一条线索，想先了解哪件事？",
+        "next": "topics"
+      },
+      "topics": {
+        "type": "choice",
+        "options": [
+          {
+            "id": "hint",
+            "text": "给我一个关键词提示。",
+            "next": "hint",
+            "effects": [
+              {
+                "type": "setFlag",
+                "id": "knows_archive",
+                "value": true
+              }
+            ]
+          },
+          {
+            "id": "answer",
+            "text": "我知道关键词了。",
+            "next": "question",
+            "condition": {
+              "type": "flag",
+              "id": "knows_archive",
+              "value": true
+            }
+          },
+          {
+            "id": "secret",
+            "text": "查看隐藏线索。",
+            "next": "question",
+            "condition": {
+              "type": "flag",
+              "id": "secret",
+              "value": true
+            },
+            "ifConditionNotMet": "remove"
+          }
+        ]
+      },
+      "hint": {
+        "type": "message",
+        "speaker": "aac",
+        "text": "试试“档案”或 archive。现在可以选择回答了。",
+        "next": "topics"
+      },
+      "question": {
+        "type": "input",
+        "placeholder": "输入你想到的关键词",
+        "gates": [
+          {
+            "keywords": [
+              "档案",
+              "archive"
+            ],
+            "target": "goodbye"
+          }
+        ]
+      },
+      "goodbye": {
+        "type": "message",
+        "speaker": "aac",
+        "text": "找到了！之后可以再去问问 Ella。",
+        "effects": [
+          {
+            "type": "discoverClue",
+            "id": "archive_keyword"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "ella-check-in",
+    "characterId": "ela",
+    "startNode": "hello",
+    "repeatable": true,
+    "nodes": {
+      "hello": {
+        "type": "message",
+        "speaker": "ela",
+        "text": "你可以随时回来找我。今天有什么发现？",
+        "next": "reply"
+      },
+      "reply": {
+        "type": "input",
+        "placeholder": "告诉 Ella 你的发现",
+        "next": "goodbye"
+      },
+      "goodbye": {
+        "type": "message",
+        "speaker": "ela",
+        "text": "我记下了，下次再聊。"
+      }
+    }
+  }
+]

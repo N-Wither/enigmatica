@@ -1,0 +1,17 @@
+{
+  "error.unknown_node_type": "未知的对话节点类型：\"%s\"",
+  "ui.send": "发送",
+  "item.notepad": "记事本",
+  "item.docfile": "文档文件",
+  "content.demo_docfile_1": "<div>示例文字</div>",
+  "ui.continue": "继续",
+  "ui.reply": "输入回复",
+  "ui.contacts": "联系人",
+  "ui.no_engine": "尚未连接游戏引擎。",
+  "ui.no_contacts": "尚未解锁联系人。",
+  "ui.other_dialogue_active": "请先完成其他联系人的进行中对话。",
+  "ui.empty_input": "请先输入回复。",
+  "ui.input_retry": "没有匹配到关键词，请再试一次。",
+  "ui.start_dialogue": "开始对话：%s",
+  "ui.no_dialogues": "暂无可开始的对话。"
+}
