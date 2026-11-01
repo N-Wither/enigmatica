@@ -79,6 +79,43 @@ progress without replaying entry effects. Dialogue state and history are detache
 from snapshots. Old saves without history restore an empty transcript; earlier
 branches are not reconstructed. Automatic persistence is left to the game.
 
+## Game layout and workspace
+
+The shell connects its direct `eg-chat`, `eg-worktable`, and `eg-inventory`
+children to `enigmatica-game.engine`. Give them the corresponding named slots:
+
+```html
+<enigmatica-game>
+  <eg-chat slot="chat"></eg-chat>
+  <eg-worktable slot="worktable"></eg-worktable>
+  <eg-inventory slot="inventory"></eg-inventory>
+</enigmatica-game>
+```
+
+Import the shell module to register the workspace and inventory; import the chat
+and individual item modules as in `index.html`. Standalone workspace/inventory
+components accept an `engine` property too and manage their own subscriptions.
+
+Inventory buttons toggle the actual `Item.ItemInstance` in the worktable. Items
+without an element remain listed but cannot be opened. Items start hidden,
+including newly acquired ones. Opened items retain their element and local DOM
+state when hidden, folded, or switched between desktop and compact layouts.
+The worktable exposes `toggleItem(item)`, `hideItem(item)`, and readonly
+`openItems`. The inventory accepts `openItems` to indicate selected buttons.
+
+`inventory-item-toggle` carries `{ item }`; `worktable-change` carries
+`{ openItems }`. Both events bubble and cross Shadow DOM boundaries. The shell
+connects these events automatically. Item actions also cross Shadow DOM and
+default their target to the owning inventory instance's ID. UI visibility does
+not dispatch game actions or enter saved game state.
+
+Desktop windows support title-bar dragging, raising, and closing. Below 1024px
+or in portrait orientation, they become independently collapsible list entries,
+and chat starts closed in a modal drawer. Desktop chat starts expanded. Chat
+preferences, window positions, and open/folded states are kept in memory only.
+Inventory `add`/`remove` mutations notify the engine and refresh connected views;
+direct edits to the underlying `items` Set bypass this notification mechanism.
+
 ## Build & Deploy
 
 **This section is written by ChatGPT**
@@ -119,5 +156,15 @@ npm run test:unit
 ```
 
 These checks rebuild `dev` and `dist`; stop the development server before running them.
+
+Run real-browser workspace, responsive layout, pointer, and modal-focus checks:
+```shell
+npm run test:browser
+```
+
+This optional check requires Node.js 22+ and an installed Chromium, Chrome, or
+Edge. It uses a temporary browser profile and automatically detects common
+installation paths; set `BROWSER_PATH` to override the executable. It starts and
+stops its own local development server and does not download a browser.
 
 

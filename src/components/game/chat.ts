@@ -14,16 +14,18 @@ export class EgChatElement extends LitElement {
   }
 
   static styles = css`
-    :host { --avatar-size: 3rem; display: flex; min-height: 24rem; height: 65vh; max-height: 48rem; color: #243249; font-family: system-ui, sans-serif; border-bottom: 1px solid #d8dfe9; }
-    [part=character-list] { width: 12rem; flex-shrink: 0; overflow: auto; background: #f4f6fa; padding: .5rem; }
+    :host { --avatar-size: 3rem; display: flex; min-width: 0; min-height: 0; height: 100%; color: #243249; font-family: system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    [part=character-list] { width: min(12rem, 45%); flex-shrink: 0; overflow: auto; background: #f4f6fa; padding: .5rem; }
     .character-info { display: flex; align-items: center; gap: .5rem; width: 100%; text-align: left; margin-bottom: .4rem; }
     .character-info[aria-pressed=true] { background: #dce7fa; border-color: #6d8cbd; }
     .avatar, .initial { width: var(--avatar-size); height: var(--avatar-size); flex-shrink: 0; border-radius: 50%; object-fit: cover; }
     .initial { display: grid; place-items: center; background: #dce3ee; }
     .name { font-weight: 600; }
+    .character-text { min-width: 0; overflow-wrap: anywhere; }
     .desc { display: block; font-size: .8em; color: #5c6b80; }
     [part=chat-panel-wrapper] { flex: 1; min-width: 0; overflow-y: auto; padding: 1rem; }
-    h2 { margin: 0 0 1rem; font-size: 1.1rem; }
+    h2 { margin: 0 0 1rem; font-size: 1.1rem; overflow-wrap: anywhere; }
     button { font: inherit; padding: .5rem .75rem; background: white; border: 1px solid #ccd5e3; border-radius: .5rem; cursor: pointer; }
     button:disabled { cursor: default; opacity: .5; }
     [part=dialogue-list] { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
@@ -31,7 +33,7 @@ export class EgChatElement extends LitElement {
     [role=status] { color: #5c6b80; }
     :focus-visible { outline: 2px solid #365fa4; outline-offset: 2px; }
     @media (max-width: 560px) {
-      [part=character-list] { width: 3.5rem; }
+      [part=character-list] { width: 4.25rem; padding: .25rem; }
       .character-info { padding: .25rem; }
       .character-text { display: none; }
     }

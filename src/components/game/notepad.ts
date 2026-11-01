@@ -4,13 +4,15 @@ import { translate } from "../../custom/translate";
 
 class EgNotepadElement extends GameItemElement {
   static styles = css`
-    :root {
+    :host {
       display: block;
     }
 
     textarea {
       resize: none;
       font-family: inherit;
+      box-sizing: border-box;
+      max-width: 100%;
     }
   `
 

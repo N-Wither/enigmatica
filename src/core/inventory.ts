@@ -2,6 +2,17 @@ import { Item } from './item'
 
 export class Inventory {
   items = new Set<Item.ItemInstance>()
+  #listeners = new Set<() => void>()
+
+  /** Observe mutations made through add/remove, including direct inventory usage. */
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener)
+    return () => { this.#listeners.delete(listener) }
+  }
+
+  #changed(): void {
+    for (const listener of [...this.#listeners]) listener()
+  }
 
   has(id: string): boolean
   has(item: Item.Instance): boolean
@@ -29,7 +40,7 @@ export class Inventory {
   add(...items: Item.Instance[]): this
   add(...items: (Item.Instance | string)[]) {
     if (items.length == 1 && typeof items[0] == 'string') {
-      this.add(Item.of(items[0]))
+      return this.add(Item.of(items[0]))
     } else {
       items.filter((item) => typeof item != 'string').forEach((item) => {
         const found = this.find(item)
@@ -39,6 +50,7 @@ export class Inventory {
           found[0].count += item.count
         }
       })
+      if (items.length) this.#changed()
       return this
     }
   }
@@ -46,10 +58,12 @@ export class Inventory {
   remove(id: string): void
   remove(item: Item.Instance): void
   remove(filter: string | Item.Instance) {
-    this.find(filter).forEach((i) => {
+    const removed = this.find(filter)
+    removed.forEach((i) => {
       this.items.delete(i)
       i.element?.remove()
     })
+    if (removed.length) this.#changed()
   }
 
   toArray(): Item.ItemInstance[] {

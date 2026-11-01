@@ -9,6 +9,7 @@ export class ItemEvent extends CustomEvent<unknown> {
   ) {
     super('item-interact', {
       bubbles: true,
+      composed: true,
     })
     this.details.name = name
     Object.assign(this.details, details)

@@ -10,7 +10,8 @@
     "test": "node scripts/dev.mjs",
     "dev": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs",
-    "test:unit": "node --test scripts/*.test.mjs"
+    "test:unit": "node --test scripts/*.test.mjs",
+    "test:browser": "node scripts/workspace.browser.mjs"
   },
   "engines": {
     "node": ">=20"

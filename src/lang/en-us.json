@@ -13,5 +13,14 @@
   "ui.empty_input": "Enter a reply first.",
   "ui.input_retry": "No keyword matched. Try another reply.",
   "ui.start_dialogue": "Start: %s",
-  "ui.no_dialogues": "No conversations available."
+  "ui.no_dialogues": "No conversations available.",
+  "ui.inventory": "Inventory",
+  "ui.worktable": "Worktable",
+  "ui.chat": "Chat",
+  "ui.show_chat": "Show chat",
+  "ui.hide_chat": "Hide chat",
+  "ui.close_item": "Close %s",
+  "ui.item_unavailable": "No view available",
+  "ui.inventory_empty": "Your inventory is empty.",
+  "ui.worktable_empty": "Select an item from your inventory to open it here."
 }

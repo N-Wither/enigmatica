@@ -54,6 +54,7 @@ export class GameEngine {
   #dialogue: GameState['dialogue']
   #action?: GameAction
   #changed = false
+  #updating = false
 
   constructor(content: GameContent = {}, initialState: Partial<GameState> = {}) {
     this.#characters = this.#index(content.characters ?? [])
@@ -68,6 +69,10 @@ export class GameEngine {
     this.#completedEvents = new Set(initialState.completedEvents)
     this.#dialogue = initialState.dialogue ? { ...structuredClone(initialState.dialogue), done: false } : null
     this.#inventory.add(...(initialState.inventory?.map(Item.from) ?? []))
+    this.#inventory.subscribe(() => {
+      if (this.#updating) this.#changed = true
+      else this.#update(() => { this.#changed = true })
+    })
     this.#completedDialogues = structuredClone(initialState.completedDialogues ?? [])
     this.#chatHistory = Object.assign(Object.create(null), structuredClone(initialState.chatHistory ?? {}))
     if (this.#dialogue) this.getCurrentDialogueNode()
@@ -273,11 +278,13 @@ export class GameEngine {
 
   #update(operation: () => void, action?: GameAction): void {
     this.#changed = false
+    this.#updating = true
     this.#action = action
     try {
       operation()
       this.#settle()
     } finally {
+      this.#updating = false
       this.#action = undefined
       this.#firedEvents.clear()
     }
