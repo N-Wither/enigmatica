@@ -11,14 +11,19 @@ class EgNotepadElement extends GameItemElement {
     textarea {
       resize: none;
       font-family: inherit;
+      font-size: inherit;
       box-sizing: border-box;
       max-width: 100%;
+      border: none;
+    }
+
+    textarea:focus {
+      outline-color: #88888822
     }
   `
 
   render() {
     return html`
-    <div>${translate('translate:item.notepad')}</div>
     <textarea cols="24" rows="16" name=${translate('translate:item.notepad')}></textarea>
     `
   }

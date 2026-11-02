@@ -11,13 +11,17 @@ export class EgDialogNodeElement extends LitElement {
     options: { attribute: false },
     active: { type: Boolean },
     messageRecorded: { type: Boolean },
+    literalText: { type: Boolean },
+    isPlayer: { type: Boolean, reflect: true }
   }
 
   static styles = css`
     :host { display: block; margin-block: .75rem; font: inherit; }
+    :host([isplayer]) [part=wrapper] { justify-content: flex-end; }
+    :host([isplayer]) [part=speaker] { text-align: right; }
     [part=wrapper] { display: flex; gap: .75rem; align-items: flex-start; }
-    [part=avatar] { width: 3rem; height: 3rem; border-radius: 50%; object-fit: cover; }
-    [part=message] { padding: .75rem 1rem; border-radius: .75rem; background: #edf1f6; max-width: 36rem; overflow-wrap: anywhere; }
+    [part=avatar] { flex-shrink: 0; width: 3rem; height: 3rem; border-radius: 50%; object-fit: cover; }
+    [part=message] { min-width: 0; text-align: start; padding: 0.3rem; border-radius: .75rem; max-width: 36rem; overflow-wrap: anywhere; }
     [part=speaker] { font-size: .85em; font-weight: 600; margin-bottom: .4rem; }
     [part=content] { white-space: pre-wrap; }
     .choice { flex-wrap: wrap; }
@@ -35,27 +39,35 @@ export class EgDialogNodeElement extends LitElement {
   declare options: CalculatedDialogChoiceOption[]
   declare active: boolean
   declare messageRecorded: boolean
+  /** User input must not be interpreted as a localization key. */
+  declare literalText: boolean
+  declare isPlayer: boolean
 
   constructor() {
     super()
     this.options = []
     this.active = false
     this.messageRecorded = false
+    this.literalText = false
+    this.isPlayer = false
   }
 
   override render() {
     const node = this.node
     if (!node) return nothing
     switch (node.type) {
+      case undefined:
       case 'message': {
         const avatar = this.character?.avatars?.[node.emotion ?? 'default'] || this.character?.avatars?.default
+        const image = html`<img part="avatar" alt="" src=${AssetManager.urlFromPath(avatar ?? '')} />`
         return html`
           ${this.messageRecorded ? nothing : html`<div part="wrapper">
-            ${avatar ? html`<img part="avatar" alt="" src=${AssetManager.urlFromPath(avatar)} />` : nothing}
+            ${(avatar && !this.isPlayer) ? image : nothing}
             <div part="message">
               <div part="speaker">${translate(this.character?.name ?? node.speaker)}</div>
-              <div part="content">${translate(node.text)}</div>
+              <div part="content">${this.literalText ? node.text : translate(node.text)}</div>
             </div>
+            ${(avatar && this.isPlayer) ? image : nothing}
           </div>`}
           ${this.active ? html`<button part="continue" @click=${() => this.emit('continue')}>${translate('translate:ui.continue')}</button>` : nothing}
         `
@@ -83,6 +95,9 @@ export class EgDialogNodeElement extends LitElement {
             }} />
           <button type="submit">${translate('translate:ui.send')}</button>
         </form></div>` : nothing
+      case 'router': {
+        return nothing
+      }
       default:
         return html`<div>${translate('translate:error.unknown_node_type', (node as DialogueNode).type)}</div>`
     }

@@ -1,4 +1,5 @@
 {
+  "character.aac.desc": "slacking",
   "error.unknown_node_type": "Unknown dialogue node type: \"%s\"",
   "ui.send": "Send",
   "item.notepad": "Notepad",
@@ -17,8 +18,8 @@
   "ui.inventory": "Inventory",
   "ui.worktable": "Worktable",
   "ui.chat": "Chat",
-  "ui.show_chat": "Show chat",
-  "ui.hide_chat": "Hide chat",
+  "ui.show_chat": ">>",
+  "ui.hide_chat": "<<",
   "ui.close_item": "Close %s",
   "ui.item_unavailable": "No view available",
   "ui.inventory_empty": "Your inventory is empty.",

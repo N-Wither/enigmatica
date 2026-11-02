@@ -6,9 +6,18 @@
     "repeatable": false,
     "nodes": {
       "hello": {
-        "type": "message",
         "speaker": "aac",
-        "text": "你好。档案室里留有一条线索，想先了解哪件事？",
+        "text": "早上好。",
+        "next": "reply-1"
+      },
+      "reply-1": {
+        "speaker": "ela",
+        "text": "有什么事吗？",
+        "next": "reply-2"
+      },
+      "reply-2": {
+        "speaker": "aac",
+        "text": "档案室里留有一条线索，想先了解哪件事？",
         "next": "topics"
       },
       "topics": {
@@ -50,7 +59,6 @@
         ]
       },
       "hint": {
-        "type": "message",
         "speaker": "aac",
         "text": "试试“档案”或 archive。现在可以选择回答了。",
         "next": "topics"
@@ -69,38 +77,41 @@
         ]
       },
       "goodbye": {
-        "type": "message",
         "speaker": "aac",
-        "text": "找到了！之后可以再去问问 Ella。",
+        "text": "找到了！之后可以再去问问档案服务。",
         "effects": [
           {
             "type": "discoverClue",
             "id": "archive_keyword"
+          },
+          {
+            "type": "unlockCharacter",
+            "id": "axv"
           }
         ]
       }
     }
   },
   {
-    "id": "ella-check-in",
-    "characterId": "ela",
+    "id": "axv-check-in",
+    "characterId": "axv",
     "startNode": "hello",
     "repeatable": true,
     "nodes": {
       "hello": {
         "type": "message",
-        "speaker": "ela",
+        "speaker": "axv",
         "text": "你可以随时回来找我。今天有什么发现？",
         "next": "reply"
       },
       "reply": {
         "type": "input",
-        "placeholder": "告诉 Ella 你的发现",
+        "placeholder": "提交你的发现",
         "next": "goodbye"
       },
       "goodbye": {
         "type": "message",
-        "speaker": "ela",
+        "speaker": "axv",
         "text": "我记下了，下次再聊。"
       }
     }

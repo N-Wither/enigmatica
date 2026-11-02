@@ -59,7 +59,13 @@ export class GameEngine {
   constructor(content: GameContent = {}, initialState: Partial<GameState> = {}) {
     this.#characters = this.#index(content.characters ?? [])
     this.#items = this.#index(content.items ?? [])
-    this.#dialogues = this.#index(content.dialogues ?? [])
+    this.#dialogues = this.#index((content.dialogues ?? []).map(value => {
+      const dialogue = structuredClone(value)
+      for (const node of Object.values(dialogue.nodes)) {
+        if (node.type === undefined) node.type = 'message'
+      }
+      return dialogue
+    }))
     this.#events = this.#index(content.events ?? [])
     this.#flags = Object.assign(Object.create(null), initialState.flags)
     this.#variables = Object.assign(Object.create(null), initialState.variables)
@@ -75,8 +81,14 @@ export class GameEngine {
     })
     this.#completedDialogues = structuredClone(initialState.completedDialogues ?? [])
     this.#chatHistory = Object.assign(Object.create(null), structuredClone(initialState.chatHistory ?? {}))
-    if (this.#dialogue) this.getCurrentDialogueNode()
-    this.#update(() => { this.#changed = true })
+    const restored = this.#dialogue
+    const path = restored && this.getCurrentDialogueNode()?.type === 'router'
+      ? this.#resolveDialoguePath(restored.id, restored.currentNode) : undefined
+    this.#update(() => {
+      // An old save at a router already applied that router's entry effects.
+      if (restored && path) this.#enterDialoguePath(restored.id, path.slice(1))
+      this.#changed = true
+    })
   }
 
   /** Returns a detached snapshot suitable for saving or rendering. */
@@ -113,6 +125,11 @@ export class GameEngine {
   }
 
   getCharacter(id: string): Character | undefined { return this.#characters.get(id) }
+
+  /** Default response speaker, in content order, regardless of contact unlocks. */
+  getPlayerCharacter(): Character | undefined {
+    return [...this.#characters.values()].find(character => character.tags?.includes('player'))
+  }
 
   getDialogue(id: string): Dialogue | undefined { return this.#dialogues.get(id) }
 
@@ -206,8 +223,8 @@ export class GameEngine {
     if (!this.getAvailableDialogues(dialogue.characterId).some(value => value.id === id)) {
       throw new Error('Dialogue is already completed: ' + id)
     }
-    this.#getDialogueNode(id, dialogue.startNode)
-    this.#update(() => this.#enterDialogueNode(id, dialogue.startNode))
+    const path = this.#resolveDialoguePath(id, dialogue.startNode)
+    this.#update(() => this.#enterDialoguePath(id, path))
     return this.getCurrentDialogueNode()
   }
 
@@ -216,9 +233,9 @@ export class GameEngine {
     const node = this.getCurrentDialogueNode()
     if (!current || !node) return null
     if (node.type !== 'message') throw new Error('Choose a dialogue option before advancing')
-    if (node.next !== undefined) this.#getDialogueNode(current.id, node.next)
+    const path = node.next === undefined ? undefined : this.#resolveDialoguePath(current.id, node.next)
     this.#update(() => {
-      if (node.next !== undefined) this.#enterDialogueNode(current.id, node.next)
+      if (path) this.#enterDialoguePath(current.id, path)
       else this.#endDialogue(true)
     })
     return this.getCurrentDialogueNode()
@@ -231,12 +248,12 @@ export class GameEngine {
     const option = node.options.find(value => value.id === id)
     if (!option) throw new Error(`Unknown dialogue option: ${id}`)
     if (option.condition && !this.checkCondition(option.condition)) throw new Error(`Dialogue option is unavailable: ${id}`)
-    this.#getDialogueNode(current.id, option.next)
+    const path = this.#resolveDialoguePath(current.id, option.next)
     this.#update(() => {
       this.#record({ dialogueId: current.id, id: current.currentNode, kind: 'choice', optionId: id })
       ;(current.chosenOptions ??= []).push(id)
       this.#applyEffects(option.effects ?? [])
-      this.#enterDialogueNode(current.id, option.next)
+      this.#enterDialoguePath(current.id, path)
     })
     return this.getCurrentDialogueNode()
   }
@@ -253,10 +270,10 @@ export class GameEngine {
       return key.length > 0 && normalized.includes(key)
     }))
     const target = gate?.target ?? node.next
-    if (target !== undefined) this.#getDialogueNode(current.id, target)
+    const path = target === undefined ? undefined : this.#resolveDialoguePath(current.id, target)
     this.#update(() => {
       this.#record({ dialogueId: current.id, id: current.currentNode, kind: 'input', userInput: text })
-      if (target !== undefined) this.#enterDialogueNode(current.id, target)
+      if (path) this.#enterDialoguePath(current.id, path)
       else if (!node.gates?.length) this.#endDialogue(true)
     })
     return { accepted: true, matched: gate !== undefined, node: this.getCurrentDialogueNode() }
@@ -336,9 +353,17 @@ export class GameEngine {
           }
           break
         case 'setVariable':
-          if (this.#variables[effect.id] !== effect.value) {
-            this.#variables[effect.id] = effect.value
-            this.#changed = true
+          if (effect.operation == undefined || effect.operation == 'set') {
+            if (this.#variables[effect.id] !== effect.value) {
+              this.#variables[effect.id] = effect.value
+              this.#changed = true
+            }
+          } else if (effect.operation == 'add') {
+            if (effect.id in this.#variables) {
+              (this.#variables[effect.id] as number) += Number(effect.value)
+            } else {
+              this.#variables[effect.id] = Number(effect.value)
+            }
           }
           break
         case 'unlockItem': this.#add(this.#unlockedItems, effect.id); break
@@ -350,18 +375,19 @@ export class GameEngine {
             console.warn(`Unknown item: "${effect.id}"`)
             break
           }
-          if (this.#unlockedItems.has(effect.id) == false) {
-            console.warn(`The item with id "${effect.id}" is not unlocked.`)
-            break
-          }
           const item = Item.of(effect.id, effect.count ?? 1, effect.state)
           this.#inventory.add(item)
+          break
+        }
+        case 'consumeItem': {
+          this.#inventory.consume({ id: effect.id, state: effect.state }, effect.count ?? 1)
           break
         }
         case 'custom': {
           const args = effect.args ?? []
           const method = this.#customMethods.get(effect.method)
           method ? method(this, ...args) : console.warn(`Unknown custom effect method "${effect.method}".`)
+          break
         }
       }
     }
@@ -374,7 +400,8 @@ export class GameEngine {
   }
 
   #getDialogueNode(dialogueId: string, nodeId: string): DialogueNode {
-    const node = this.#dialogues.get(dialogueId)?.nodes[nodeId]
+    const nodes = this.#dialogues.get(dialogueId)?.nodes
+    const node = nodes && Object.hasOwn(nodes, nodeId) ? nodes[nodeId] : undefined
     if (!node) throw new Error(`Unknown dialogue node: ${dialogueId}/${nodeId}`)
     return node
   }
@@ -383,6 +410,46 @@ export class GameEngine {
     const characterId = this.#dialogues.get(entry.dialogueId)!.characterId
     ;(this.#chatHistory[characterId] ??= []).push(entry)
     this.#changed = true
+  }
+
+  /** Resolve and validate before mutating state or executing any entry/response effects. */
+  #resolveDialoguePath(dialogueId: string, nodeId: string): string[] {
+    const path: string[] = []
+    let routers = 0
+    while (true) {
+      const node = this.#getDialogueNode(dialogueId, nodeId)
+      path.push(nodeId)
+      if (node.type !== 'router') return path
+      const fail = (reason: string): never => { throw new Error(
+        `Invalid router ${dialogueId}/${nodeId}: ${reason}`) }
+      if (++routers > 100) fail('Exceeded 100 automatic jumps')
+      if (!Array.isArray(node.targets) || !node.targets.length) fail('Empty targets')
+      const targets = node.targets.map(target => {
+        const id = typeof target === 'string' ? target : target?.id
+        const weight = typeof target === 'string' || target?.weight === undefined ? 1 : target.weight
+        if (typeof id !== 'string' || !id || !Object.hasOwn(this.#dialogues.get(dialogueId)!.nodes, id)) {
+          fail(`Unknown target: ${id}`)
+        }
+        if (typeof weight !== 'number' || !Number.isFinite(weight) || weight < 0) fail(`Invalid weight for ${id}`)
+        return { id, weight }
+      })
+      // Scaling keeps valid, very large relative weights from overflowing the sum.
+      let max = 0
+      for (const target of targets) max = Math.max(max, target.weight)
+      if (max === 0) fail('No positive target weight')
+      const positive = targets.filter(target => target.weight > 0)
+      const total = positive.reduce((sum, target) => sum + target.weight / max, 0)
+      let draw = Math.random() * total
+      nodeId = positive.at(-1)!.id
+      for (const target of positive) {
+        draw -= target.weight / max
+        if (draw < 0) { nodeId = target.id; break }
+      }
+    }
+  }
+
+  #enterDialoguePath(dialogueId: string, path: readonly string[]): void {
+    for (const nodeId of path) this.#enterDialogueNode(dialogueId, nodeId)
   }
 
   #enterDialogueNode(dialogueId: string, nodeId: string): void {

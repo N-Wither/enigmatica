@@ -586,3 +586,295 @@ test('dialogue node hides historical controls, renders conditional options, and 
   element.active = false
   assert.equal(templates(element.render()).length, 0)
 })
+
+
+function routedDialogue(nodes, startNode = 'route') {
+  return { id: 'routed', characterId: 'guide', startNode, nodes }
+}
+const message = text => ({ speaker: 'guide', text })
+
+test('routers select relative weights at boundaries, default to one, and exclude zero', t => {
+  const random = t.mock.method(Math, 'random', () => 0)
+  const content = routedDialogue({
+    route: { type: 'router', targets: ['a', { id: 'b' }, { id: 'c', weight: 2 }, { id: 'zero', weight: 0 }] },
+    a: message('A'), b: message('B'), c: message('C'), zero: message('Never'),
+  })
+  for (const [draw, expected] of [[0, 'A'], [.249999, 'A'], [.25, 'B'], [.499999, 'B'], [.5, 'C'], [.999999, 'C']]) {
+    random.mock.mockImplementation(() => draw)
+    const engine = dialogueEngine([content])
+    assert.equal(engine.startDialogue('routed').text, expected)
+    assert.equal(engine.state.chatHistory.guide.length, 1)
+    assert.notEqual(engine.state.chatHistory.guide[0].id, 'route')
+  }
+  random.mock.mockImplementation(() => .75)
+  const large = dialogueEngine([routedDialogue({
+    route: { type: 'router', targets: [{ id: 'a', weight: 1e308 }, { id: 'b', weight: 1e308 }] },
+    a: message('A'), b: message('B'),
+  })])
+  assert.equal(large.startDialogue('routed').text, 'B')
+})
+
+test('all dialogue entry paths automatically route and apply effects in entry order once', t => {
+  t.mock.method(Math, 'random', () => 0)
+  const entered = id => [{ type: 'custom', method: 'entered', args: [id] }]
+  for (const [entry, respond] of [
+    [{ type: 'message', speaker: 'guide', text: 'Start', next: 'route' }, engine => engine.advanceDialogue()],
+    [{ type: 'choice', options: [{ id: 'go', text: 'Go', next: 'route', effects: entered('option') }] }, engine => engine.chooseDialogueOption('go')],
+    [{ type: 'input', gates: [{ keywords: ['key'], target: 'route' }] }, engine => engine.submitDialogueInput('key').node],
+    [{ type: 'input', next: 'route' }, engine => engine.submitDialogueInput('anything').node],
+  ]) {
+    const engine = dialogueEngine([routedDialogue({
+      entry, route: { type: 'router', targets: ['second'], effects: entered('route') },
+      second: { type: 'router', targets: ['end'], effects: entered('second') },
+      end: { ...message('End'), effects: entered('end') },
+    }, 'entry')])
+    const trace = [], snapshots = []
+    engine.customMethods.set('entered', (engine, id) => trace.push([id, engine.state.dialogue.currentNode]))
+    engine.subscribe(state => snapshots.push(state))
+    engine.startDialogue('routed')
+    assert.equal(respond(engine).text, 'End')
+    assert.deepEqual(trace.map(value => value[0]), entry.type === 'choice' ? ['option', 'route', 'second', 'end'] : ['route', 'second', 'end'])
+    assert.deepEqual(trace.slice(-3), [['route', 'route'], ['second', 'second'], ['end', 'end']])
+    assert.equal(snapshots.length, 2)
+    assert.equal(snapshots[1].dialogue.currentNode, 'end')
+    assert.equal(engine.state.chatHistory.guide.some(entry => ['route', 'second'].includes(entry.id)), false)
+  }
+  for (const destination of [{ type: 'choice', options: [] }, { type: 'input' }]) {
+    const engine = dialogueEngine([routedDialogue({ route: { type: 'router', targets: ['end'] }, end: destination })])
+    assert.equal(engine.startDialogue('routed').type, destination.type)
+    assert.equal(engine.state.chatHistory.guide, undefined)
+  }
+})
+
+test('invalid routers fail before responses, state changes, notifications or effects', t => {
+  t.mock.method(Math, 'random', () => 0)
+  const invalid = [[], [{ id: 'end', weight: 0 }], [{ id: 'end', weight: -1 }],
+    [{ id: 'end', weight: NaN }], [{ id: 'end', weight: Infinity }], [{ id: 'end', weight: null }],
+    ['missing'], ['toString'], [{ id: 'missing', weight: 0 }]]
+  for (const targets of invalid) {
+    for (const kind of ['start', 'message', 'choice', 'input']) {
+      const entry = kind === 'message' ? { ...message('Start'), type: 'message', next: 'route' }
+        : kind === 'choice' ? { type: 'choice', options: [{ id: 'go', text: 'Go', next: 'route', effects: [setFlag('badOption')] }] }
+        : { type: 'input', next: 'route' }
+      const engine = dialogueEngine([routedDialogue({ entry,
+        route: { type: 'router', targets: ['bad'], effects: [setFlag('badRoute')] },
+        bad: { type: 'router', targets, next: 'end', effects: [setFlag('badTarget')] }, end: message('End'),
+      }, kind === 'start' ? 'route' : 'entry')])
+      if (kind !== 'start') engine.startDialogue('routed')
+      const before = engine.state
+      let notifications = 0
+      engine.subscribe(() => notifications++)
+      const attempt = () => kind === 'start' ? engine.startDialogue('routed') : kind === 'message' ? engine.advanceDialogue()
+        : kind === 'choice' ? engine.chooseDialogueOption('go') : engine.submitDialogueInput('reply')
+      assert.throws(attempt, new RegExp('Invalid router routed/bad:'))
+      assert.deepEqual(engine.state, before)
+      assert.equal(notifications, 0)
+    }
+  }
+})
+
+test('router chains allow 100 jumps and reject the 101st, including cycles, without mutation', t => {
+  t.mock.method(Math, 'random', () => 0)
+  for (const count of [100, 101]) {
+    const nodes = { end: message('End') }
+    for (let i = 0; i < count; i++) nodes['r' + i] = { type: 'router', targets: [i === count - 1 ? 'end' : 'r' + (i + 1)], effects: [setFlag('entered')] }
+    const engine = dialogueEngine([routedDialogue(nodes, 'r0')])
+    if (count === 100) assert.equal(engine.startDialogue('routed').text, 'End')
+    else {
+      const before = engine.state
+      assert.throws(() => engine.startDialogue('routed'), new RegExp('routed/r100: Exceeded 100'))
+      assert.deepEqual(engine.state, before)
+    }
+  }
+  const engine = dialogueEngine([routedDialogue({ route: { type: 'router', targets: ['route'], effects: [setFlag('entered')] } })])
+  const before = engine.state
+  assert.throws(() => engine.startDialogue('routed'), /Exceeded 100/)
+  assert.deepEqual(engine.state, before)
+})
+
+test('omitted types normalize on a copy and match message history, effects, completion and restore', () => {
+  const raw = routedDialogue({ route: { ...message('Default message'), next: 'end', effects: [setFlag('entered')] }, end: message('End') })
+  const engine = dialogueEngine([raw])
+  assert.equal(engine.getDialogue('routed').nodes.route.type, 'message')
+  assert.equal(raw.nodes.route.type, undefined)
+  assert.equal(engine.startDialogue('routed').type, 'message')
+  assert.equal(engine.state.flags.entered, true)
+  engine.applyEffects([setFlag('entered', false)])
+  const restored = dialogueEngine([raw], engine.state)
+  assert.equal(restored.state.flags.entered, false)
+  assert.equal(restored.getCurrentDialogueNode().type, 'message')
+  assert.deepEqual(restored.state.chatHistory.guide.map(entry => entry.id), ['route'])
+  assert.equal(restored.advanceDialogue().text, 'End')
+  assert.equal(restored.advanceDialogue(), null)
+  assert.equal(restored.state.completedDialogues[0].done, true)
+  const legacy = dialogueEngine([raw], { dialogue: { id: 'routed', currentNode: 'route', done: false } })
+  assert.equal(legacy.getCurrentDialogueNode().type, 'message')
+  assert.equal(legacy.state.flags.entered, undefined)
+})
+
+test('router saves restore the final node without rerolling; legacy routers skip saved entry effects', t => {
+  const random = t.mock.method(Math, 'random', () => 0)
+  const add = id => [{ type: 'setVariable', id, value: 1, operation: 'add' }]
+  const content = routedDialogue({
+    route: { type: 'router', targets: ['second'], effects: add('first') },
+    second: { type: 'router', targets: ['end'], effects: add('second') },
+    end: { ...message('End'), effects: add('end') },
+  })
+  const engine = dialogueEngine([content])
+  engine.startDialogue('routed')
+  const saved = engine.state, calls = random.mock.callCount()
+  const restored = dialogueEngine([content], saved)
+  restored.getCurrentDialogueNode()
+  assert.deepEqual(restored.state, saved)
+  assert.equal(random.mock.callCount(), calls)
+  const legacy = dialogueEngine([content], {
+    dialogue: { id: 'routed', currentNode: 'route', done: false, chosenOptions: ['previous'] }, variables: { first: 1 },
+  })
+  assert.deepEqual(legacy.state.variables, { first: 1, second: 1, end: 1 })
+  assert.equal(legacy.state.dialogue.currentNode, 'end')
+  assert.deepEqual(legacy.state.dialogue.chosenOptions, ['previous'])
+  assert.deepEqual(legacy.state.chatHistory.guide.map(entry => entry.id), ['end'])
+})
+
+test('player flags follow the speaker in history and legacy active messages', async () => {
+  globalThis.document = { documentElement: { lang: 'en' } }
+  const content = routedDialogue({ route: { speaker: 'player', text: 'Player', next: 'end' }, end: message('Guide') })
+  const makeEngine = initial => new GameEngine({ characters: [guide, { id: 'player', name: 'Player', tags: ['player'] }], dialogues: [content] }, { unlockedCharacters: ['guide'], ...initial })
+  const engine = makeEngine()
+  engine.startDialogue('routed')
+  const chat = new TestChat()
+  chat.engine = engine
+  chat.connect()
+  await chat.updateComplete
+  let nodes = templates(chat.render()).filter(template => template.strings.join('').includes('<eg-dialognode'))
+  assert.equal(nodes.length, 2)
+  assert.equal(bindings(nodes[0])['.isPlayer'], true)
+  assert.equal(bindings(nodes[1])['.isPlayer'], true)
+  engine.advanceDialogue()
+  await chat.updateComplete
+  nodes = templates(chat.render()).filter(template => template.strings.join('').includes('<eg-dialognode'))
+  assert.equal(bindings(nodes[1])['.isPlayer'], false)
+  assert.equal(bindings(nodes[2])['.isPlayer'], false)
+  chat.engine = makeEngine({ dialogue: { id: 'routed', currentNode: 'route', done: false } })
+  await chat.updateComplete
+  nodes = templates(chat.render()).filter(template => template.strings.join('').includes('<eg-dialognode'))
+  assert.equal(nodes.length, 1)
+  assert.equal(bindings(nodes[0])['.isPlayer'], true)
+  assert.equal(bindings(nodes[0])['.messageRecorded'], false)
+  chat.disconnect()
+  const element = new (customElements.get('eg-dialognode'))()
+  assert.equal(element.isPlayer, false)
+  element.node = message('Standalone default')
+  assert.equal(templates(element.render()).some(template => template.strings.join('').includes('part="message"')), true)
+  element.node = { type: 'unknown', speaker: 'guide', text: 'Unknown' }
+  assert.equal(templates(element.render()).some(template => template.strings.join('').includes('part="message"')), false)
+})
+
+
+const responsePlayer = { id: 'actor', name: 'Actor', tags: ['player'], avatars: { default: 'actor.png' } }
+function responseEngine(choiceAs, inputAs, characters = [guide, responsePlayer], initial = {}) {
+  return new GameEngine({ characters, dialogues: [{ id: 'responses', characterId: 'guide', startNode: 'choose', nodes: {
+    choose: { type: 'choice', options: [{ id: 'reply', text: 'translate:ui.send', as: choiceAs, next: 'ask', effects: [setFlag('chosen')] }] },
+    ask: { type: 'input', as: inputAs, effects: [setFlag('asked')], gates: [{ keywords: ['finish'], target: 'end' }] },
+    end: { speaker: 'guide', text: 'End' },
+  } }] }, { unlockedCharacters: ['guide'], ...initial })
+}
+function renderedHistoryNodes(chat) {
+  return templates(chat.render()).filter(template => template.strings.join('').includes('<eg-dialognode'))
+    .map(bindings).filter(properties => properties['.active'] !== true)
+}
+
+test('response speakers use explicit as or the first exact player tag, including locked contacts', async () => {
+  globalThis.document = { documentElement: { lang: 'en' } }
+  const secondPlayer = { id: 'second', name: 'Second', tags: ['player'] }
+  const wrongTag = { id: 'wrong', name: 'Wrong tag', tags: ['Player'] }
+  for (const [choiceAs, inputAs, expectedChoice, expectedInput] of [
+    [undefined, undefined, 'actor', 'actor'], ['guide', 'second', 'guide', 'second'],
+    ['missing', 'other-missing', 'missing', 'other-missing'],
+  ]) {
+    const engine = responseEngine(choiceAs, inputAs, [guide, wrongTag, responsePlayer, secondPlayer])
+    assert.equal(engine.getPlayerCharacter().id, 'actor')
+    assert.deepEqual(engine.getAvailableCharacters().map(character => character.id), ['guide'])
+    engine.startDialogue('responses')
+    engine.chooseDialogueOption('reply')
+    engine.submitDialogueInput('reply')
+    const chat = new TestChat()
+    chat.engine = engine
+    chat.connect()
+    await chat.updateComplete
+    const before = engine.state
+    const nodes = renderedHistoryNodes(chat)
+    assert.equal(nodes.length, 2)
+    assert.deepEqual(nodes.map(properties => properties['.node'].speaker), [expectedChoice, expectedInput])
+    assert.deepEqual(nodes.map(properties => properties['.literalText']), [false, true])
+    assert.deepEqual(nodes.map(properties => properties['.isPlayer']), [expectedChoice === 'actor' || expectedChoice === 'second', expectedInput === 'actor' || expectedInput === 'second'])
+    assert.equal(nodes[0]['.character']?.id, engine.getCharacter(expectedChoice)?.id)
+    assert.equal(nodes[0]['.node'].type, 'message')
+    assert.equal(nodes[0]['.node'].text, 'translate:ui.send')
+    assert.equal(nodes[1]['.node'].text, 'reply')
+    assert.equal(nodes[0]['@continue'], undefined)
+    assert.deepEqual(engine.state, before)
+    chat.disconnect()
+  }
+})
+
+test('response rendering preserves literal input, localization, retry ordering and saved history without replay', async t => {
+  const previousLocation = globalThis.location
+  globalThis.location = { origin: 'http://localhost' }
+  t.after(() => {
+    if (previousLocation === undefined) delete globalThis.location
+    else globalThis.location = previousLocation
+  })
+  globalThis.document = { documentElement: { lang: 'en' } }
+  const engine = responseEngine('guide', undefined)
+  engine.startDialogue('responses')
+  engine.chooseDialogueOption('reply')
+  const rawInputs = ['translate:ui.send', '<img src=x onerror="alert(1)">']
+  for (const text of rawInputs) assert.equal(engine.submitDialogueInput(text).matched, false)
+  engine.applyEffects([setFlag('chosen', false), setFlag('asked', false)])
+  const restored = responseEngine('guide', undefined, [guide, responsePlayer], engine.state)
+  for (const current of [engine, restored]) {
+    const chat = new TestChat()
+    chat.engine = current
+    chat.connect()
+    await chat.updateComplete
+    const nodes = renderedHistoryNodes(chat)
+    assert.equal(nodes.length, 3)
+    assert.deepEqual(nodes.map(properties => properties['.node'].text), ['translate:ui.send', ...rawInputs])
+    assert.deepEqual(current.state.chatHistory.guide.map(entry => entry.kind), ['choice', 'input', 'input'])
+    for (const properties of nodes) {
+      const element = new (customElements.get('eg-dialognode'))()
+      element.node = properties['.node']
+      element.character = properties['.character']
+      element.literalText = properties['.literalText']
+      const rendered = templates(element.render())
+      assert.equal(rendered.some(template => template.strings.join('').includes('part="continue"')), false)
+      const content = rendered.find(template => template.strings.join('').includes('part="content"'))
+      assert.equal(content.values.includes(properties['.node'].text), properties['.literalText'])
+    }
+    assert.equal(current.state.flags.chosen, false)
+    assert.equal(current.state.flags.asked, false)
+    chat.disconnect()
+  }
+})
+
+test('responses without a player retain the fallback bubble, while explicit as still works', async () => {
+  globalThis.document = { documentElement: { lang: 'en' } }
+  for (const as of [undefined, 'guide']) {
+    const engine = responseEngine(as, as, [guide])
+    assert.equal(engine.getPlayerCharacter(), undefined)
+    engine.startDialogue('responses')
+    engine.chooseDialogueOption('reply')
+    engine.submitDialogueInput('translate:ui.send')
+    const chat = new TestChat()
+    chat.engine = engine
+    chat.connect()
+    await chat.updateComplete
+    const rendered = templates(chat.render())
+    const fallback = rendered.filter(template => template.strings.join('').includes('part="response"'))
+    assert.equal(fallback.length, as === undefined ? 2 : 0)
+    assert.equal(renderedHistoryNodes(chat).length, as === undefined ? 0 : 2)
+    if (as === undefined) assert.equal(fallback[1].values.includes('translate:ui.send'), true)
+    chat.disconnect()
+  }
+})

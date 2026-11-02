@@ -5,7 +5,7 @@ import type { EgChatElement } from './game/chat'
 import { EgInventoryElement } from './game/inventory'
 import { EgWorktableElement } from './game/worktable'
 import { compactLayout } from './game/layout'
-import { translate } from '../custom/translate'
+import { localize } from '../custom/translate'
 import type { Item } from '../core/item'
 
 /**
@@ -22,25 +22,33 @@ export class EnigmaticaGameElement extends LitElement {
   }
 
   static styles = css`
+    :host { --chat-toggle-button-width: 2.4rem; }
     :host { display: flex; flex-direction: column; height: 100vh; height: 100dvh; min-height: 0; color: #243249; font-family: system-ui, sans-serif; }
     * { box-sizing: border-box; }
     .toolbar { display: flex; align-items: center; gap: 1rem; padding: .5rem .75rem; border-bottom: 1px solid #d8dfe9; background: #fff; }
     .brand { font-weight: 700; }
-    button { font: inherit; color: inherit; cursor: pointer; padding: .5rem .75rem; background: white; border: 1px solid #ccd5e3; border-radius: .5rem; }
-    button:focus-visible { outline: 2px solid #365fa4; outline-offset: 2px; }
-    main { display: grid; flex: 1; min-height: 0; min-width: 0; grid-template-columns: 36% minmax(0, 1fr); grid-template-rows: minmax(0, 3fr) minmax(0, 1fr); grid-template-areas: 'chat worktable' 'chat inventory'; }
-    main.collapsed, main.compact { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'worktable' 'inventory'; }
-    dialog { grid-area: chat; position: relative; inset: auto; display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; max-width: none; max-height: none; padding: 0; margin: 0; color: inherit; border: 0; border-right: 1px solid #d8dfe9; background: white; }
+    button[part=chat-toggle] { grid-area: button; display: flex; align-items: center; justify-content: center; font: inherit; color: inherit; cursor: pointer; padding: .5rem .75rem; background: white; border: none; border-inline-end: 1px solid #ccd5e3; height: 100%; }
+    button[part=chat-toggle]:focus-visible { outline: 2px solid #365fa4; outline-offset: 2px; }
+    main { display: grid; flex: 1; min-height: 0; min-width: 0; grid-template-columns: 36% var(--chat-toggle-button-width) minmax(0, 1fr); grid-template-rows: minmax(0, 3fr) minmax(0, 1fr); grid-template-areas: 'chat button worktable' 'chat button inventory'; }
+    main.collapsed, main.compact { grid-template-columns: 0% var(--chat-toggle-button-width) minmax(0, 1fr); }
+    dialog { position: relative; inset: auto; display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; max-width: none; max-height: none; padding: 0; margin: 0; color: inherit; border: 0; border-right: 1px solid #d8dfe9; background: white; }
     dialog:not([open]) { display: none; }
     .chat-header { display: flex; align-items: center; justify-content: space-between; padding: .5rem .75rem; border-bottom: 1px solid #d8dfe9; }
     .chat-body { flex: 1; min-height: 0; overflow: hidden; }
-    .worktable { grid-area: worktable; min-width: 0; min-height: 0; overflow: hidden; }
-    .inventory { grid-area: inventory; min-width: 0; min-height: 0; overflow: hidden; border-top: 1px solid #d8dfe9; }
+    [part=chat] { grid-area: chat; display: flex; min-width: 0; overflow: hidden; }
+    [part=worktable] { grid-area: worktable; min-width: 0; min-height: 0; overflow: hidden; }
+    [part=inventory] { grid-area: inventory; min-width: 0; min-height: 0; overflow: hidden; border-top: 1px solid #d8dfe9; }
     slot { display: block; height: 100%; min-height: 0; }
     slot[hidden] { display: none; }
     ::slotted(eg-chat), ::slotted(eg-worktable), ::slotted(eg-inventory) { height: 100%; min-height: 0; min-width: 0; max-height: none; }
-    .compact dialog { position: fixed; inset: 0 auto 0 0; width: min(100%, 34rem); height: 100vh; height: 100dvh; box-shadow: .5rem 0 2rem #16283c40; }
-    dialog::backdrop { background: #16283c80; }
+    .compact dialog { position: fixed; inset: 0 auto 0 0; width: min(100%, 34rem); height: 100vh; height: 100dvh; box-shadow: .5rem 0 2rem #16283c40; translate: -100% 0; }
+    .compact dialog[data-visible] { translate: 0 0; }
+    dialog::backdrop { background: #16283c80; opacity: 0; transition: opacity 200ms ease-in-out; }
+    dialog[data-visible]::backdrop { opacity: 1; }
+    dialog[data-instant]::backdrop { transition: none; }
+    @media (prefers-reduced-motion: reduce) { dialog::backdrop { transition: none; } }
+    [part=chat-hide] { background-color: transparent; border: none; font-family: inherit; font-size: inherit; }
+    [part=chat-hide]:is(:hover, :focus) { background-color: #00000011; }
   `
 
   /** Assign an engine configured with content and optional saved state. */
@@ -52,6 +60,13 @@ export class EnigmaticaGameElement extends LitElement {
   #desktopOpen = true
   #compactOpen = false
   #dialogModal = false
+  #chatTarget?: boolean
+  #chatLayout?: boolean
+  #chatFromColumns?: string
+  #chatAnimations: Animation[] = []
+  #chatRevision = 0
+  #chatInstant = false
+  #reducedMotion?: MediaQueryList
 
   constructor() {
     super()
@@ -68,29 +83,31 @@ export class EnigmaticaGameElement extends LitElement {
     return html`
       <header class="toolbar">
         <span class="brand">Enigmatica</span>
-        <button id="chat-toggle" type="button" aria-expanded=${open} aria-controls="chat-drawer"
-          @click=${() => this.#setChatOpen(!open)}>
-          ${translate(open ? 'translate:ui.hide_chat' : 'translate:ui.show_chat')}
-        </button>
       </header>
       <main class=${this.compact ? 'compact' : open ? '' : 'collapsed'}>
-        <dialog id="chat-drawer" aria-label=${translate('translate:ui.chat')}
+        <section part="chat">
+          <dialog id="chat-drawer" aria-label=${localize('ui.chat')}
           @cancel=${(event: Event) => { event.preventDefault(); this.#setChatOpen(false) }}
           @click=${(event: MouseEvent) => {
             const dialog = event.currentTarget as HTMLDialogElement
             const rect = dialog.getBoundingClientRect()
             if (this.compact && event.target === dialog &&
               (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) this.#setChatOpen(false)
-          }}>
-          <div class="chat-header">
-            <strong>${translate('translate:ui.chat')}</strong>
-            <button type="button" aria-label=${translate('translate:ui.hide_chat')}
+            }}>
+            <div class="chat-header">
+              <strong>${localize('ui.chat')}</strong>
+              <button part="chat-hide" type="button" aria-label=${localize('ui.hide_chat')}
               @click=${() => this.#setChatOpen(false)}>×</button>
-          </div>
-          <div class="chat-body"><slot name="chat" @slotchange=${this.#syncChildren}></slot></div>
-        </dialog>
-        <section class="worktable"><slot name="worktable" @slotchange=${this.#syncChildren}></slot></section>
-        <section class="inventory"><slot name="inventory" @slotchange=${this.#syncChildren}></slot></section>
+            </div>
+            <div class="chat-body"><slot name="chat" @slotchange=${this.#syncChildren}></slot></div>
+          </dialog>
+        </section>
+        <button part="chat-toggle" type="button" aria-expanded=${open} aria-controls="chat-drawer"
+          @click=${() => this.#setChatOpen(!open)}>
+          ${localize(open ? 'ui.hide_chat' : 'ui.show_chat')}
+        </button>
+        <section part="worktable"><slot name="worktable" @slotchange=${this.#syncChildren}></slot></section>
+        <section part="inventory"><slot name="inventory" @slotchange=${this.#syncChildren}></slot></section>
         <slot hidden></slot>
       </main>
     `
@@ -104,6 +121,9 @@ export class EnigmaticaGameElement extends LitElement {
     this.#media = globalThis.matchMedia?.(compactLayout)
     this.compact = this.#media?.matches ?? false
     this.#media?.addEventListener('change', this.#layoutChanged)
+    this.#reducedMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')
+    this.#reducedMotion?.addEventListener('change', this.#motionChanged)
+    globalThis.addEventListener?.('resize', this.#chatResized)
     this.#observeEngine()
   }
 
@@ -112,6 +132,11 @@ export class EnigmaticaGameElement extends LitElement {
     this.removeEventListener('inventory-item-toggle', this.#inventoryToggle)
     this.removeEventListener('worktable-change', this.#worktableChanged)
     this.#media?.removeEventListener('change', this.#layoutChanged)
+    this.#reducedMotion?.removeEventListener('change', this.#motionChanged)
+    globalThis.removeEventListener?.('resize', this.#chatResized)
+    this.#cancelChatAnimations()
+    this.#chatTarget = undefined
+    this.#chatLayout = undefined
     this.renderRoot?.querySelector?.<HTMLDialogElement>('dialog')?.close()
     this.#unsubscribe?.()
     this.#unsubscribe = undefined
@@ -126,20 +151,85 @@ export class EnigmaticaGameElement extends LitElement {
 
   protected override updated(): void {
     this.#syncChildren()
+    this.#syncChat()
+  }
+
+  #cancelChatAnimations(): void {
+    this.#chatRevision++
+    for (const animation of this.#chatAnimations) animation.cancel()
+    this.#chatAnimations = []
+  }
+
+  #syncChat(): void {
     const dialog = this.renderRoot.querySelector?.<HTMLDialogElement>('dialog')
-    if (!dialog || !this.isConnected) return
+    const main = this.renderRoot.querySelector?.<HTMLElement>('main')
+    if (!dialog || !main || !this.isConnected) return
     const open = this.compact ? this.#compactOpen : this.#desktopOpen
-    if (dialog.open && (!open || this.#dialogModal !== this.compact)) dialog.close()
+    const sameLayout = this.#chatLayout === this.compact
+    if (sameLayout && this.#chatTarget === open) return
+    const fromTranslate = dialog.open ? getComputedStyle(dialog).translate : '-100% 0px'
+    const fromColumns = this.#chatFromColumns
+    this.#chatFromColumns = undefined
+    this.#cancelChatAnimations()
+    const revision = this.#chatRevision
+    this.#chatLayout = this.compact
+    this.#chatTarget = open
+    const animate = sameLayout && !this.#chatInstant && !this.#reducedMotion?.matches
+    this.#chatInstant = false
+    dialog.toggleAttribute('data-instant', !animate)
+    if (dialog.open && this.#dialogModal !== this.compact) dialog.close()
     if (open && !dialog.open) {
       this.#dialogModal = this.compact
       if (this.compact) dialog.showModal()
       else dialog.show()
     }
+    // Establish the initial backdrop opacity before changing its visible state.
+    if (dialog.open) getComputedStyle(dialog, '::backdrop').opacity
+    dialog.toggleAttribute('data-visible', open)
+    const timing = { duration: 200, easing: 'ease-in-out' }
+    if (animate && this.compact && dialog.open) {
+      this.#chatAnimations.push(dialog.animate([
+        { translate: fromTranslate }, { translate: open ? '0px 0px' : '-100% 0px' }
+      ], timing))
+    } else if (animate && !this.compact && fromColumns) {
+      this.#chatAnimations.push(main.animate([
+        { gridTemplateColumns: fromColumns },
+        { gridTemplateColumns: getComputedStyle(main).gridTemplateColumns }
+      ], timing))
+    }
+    const finish = () => {
+      if (revision !== this.#chatRevision || !this.isConnected) return
+      this.#chatAnimations = []
+      if (!open) {
+        const restoreFocus = dialog.open && (this.#dialogModal || dialog.contains(this.shadowRoot?.activeElement ?? null))
+        dialog.close()
+        if (restoreFocus) this.renderRoot.querySelector<HTMLButtonElement>('[part=chat-toggle]')?.focus()
+      }
+    }
+    if (this.#chatAnimations.length) {
+      void Promise.all(this.#chatAnimations.map(animation => animation.finished)).then(finish, () => {})
+    } else finish()
   }
 
   #setChatOpen(open: boolean): void {
+    const main = this.renderRoot.querySelector?.<HTMLElement>('main')
+    if (main) this.#chatFromColumns = getComputedStyle(main).gridTemplateColumns
     if (this.compact) this.#compactOpen = open
     else this.#desktopOpen = open
+    this.requestUpdate()
+  }
+
+  #chatResized = (): void => {
+    // Pixel grid endpoints become stale on resize; settle in the new layout.
+    this.#chatInstant = true
+    this.#chatTarget = undefined
+    this.#chatFromColumns = undefined
+    this.requestUpdate()
+  }
+
+  #motionChanged = (): void => {
+    this.#chatInstant = true
+    this.#chatTarget = undefined
     this.requestUpdate()
   }
 

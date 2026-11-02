@@ -31,12 +31,13 @@ export type Condition =
 
 export type Effect =
   | { type: 'setFlag'; id: string; value: boolean }
-  | { type: 'setVariable'; id: string; value: number | string }
+  | { type: 'setVariable'; id: string; value: number | string, operation?: 'set' | 'add' }
   | { type: 'unlockItem'; id: string }
   | { type: 'unlockCharacter'; id: string }
   | { type: 'discoverClue'; id: string }
   | { type: 'triggerEvent'; id: string }
   | { type: 'giveItem', id: string, count?: number, state?: Record<string, unknown>}
+  | { type: 'consumeItem', id: string, count?: number, state?: Record<string, unknown>}
   | { 
     type: 'custom',
     method: string,
@@ -58,24 +59,34 @@ export interface Dialogue {
   /** Default: `false` */
   repeatable?: boolean
 }
-type DialogueNodeType = 'message' | 'choice' | 'input'
+
+type DialogueNodeType = 'message' | 'choice' | 'input' | 'router'
+
 interface BasicDialogueNode<T extends DialogueNodeType> {
   type: T
+  /**
+   * If omitted, this node will be treated as the final node.
+   */
   next?: string
   effects?: Effect[]
 }
+
 interface DialogueChoiceOption {
   id: string
   text: string
   next: string
+  /** Determines which character made this choice. If omitted, the first character with tag `player` in character list will be used. */
+  as?: string
   condition?: Condition
   /** Determines how to show this option when condition not met, default to `disable`. */
   ifConditionNotMet?: 'remove' | 'disable'
   effects?: Effect[]
 }
+
 export interface CalculatedDialogChoiceOption extends DialogueChoiceOption {
   show: 'remove' | 'disable' | 'normal'
 }
+
 export interface StartedDialogueInfo {
   id: string
   done: boolean
@@ -83,13 +94,13 @@ export interface StartedDialogueInfo {
   chosenOptions?: string[]
 }
 
-export interface MessageDialogNode extends BasicDialogueNode<'message'> {
+export interface MessageDialogNode extends Omit<BasicDialogueNode<'message'>, 'type'> {
+  /** Omitted node types default to message. */
+  type?: 'message'
   speaker: string
   /** Defines which avatar to show, if omitted, use the default avatar. */
   emotion?: string
   text: string
-  /** If omitted, this node will be treated as the final node. */
-  next?: string
 }
 
 export interface ChoiceDialogNode extends BasicDialogueNode<'choice'> {
@@ -101,6 +112,8 @@ export interface InputDialogNode extends BasicDialogueNode<'input'> {
   placeholder?: string
   /** The default value of input box. */
   value?: string
+  /** Determines which character replied. If omitted, the first character with tag `player` in character list will be used. */
+  as?: string
   /** If user input matches the keywords, jump to a node. */
   gates?: {
     keywords: string[]
@@ -108,7 +121,15 @@ export interface InputDialogNode extends BasicDialogueNode<'input'> {
   }[]
 }
 
-export type DialogueNode = MessageDialogNode | ChoiceDialogNode | InputDialogNode
+/** Automatically redirect to a specific node. */
+export interface RouterDialogNode extends BasicDialogueNode<'router'> {
+  targets: ({
+    id: string
+    weight?: number
+  } | string)[]
+}
+
+export type DialogueNode = MessageDialogNode | ChoiceDialogNode | InputDialogNode | RouterDialogNode
 
 export interface GameEvent {
   id: string

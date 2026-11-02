@@ -1,4 +1,11 @@
+import { ObjectUtils } from '../custom/util/object'
 import { Item } from './item'
+
+interface ItemFilter {
+  id: string
+  count?: number
+  state?: Item.State
+}
 
 export class Inventory {
   items = new Set<Item.ItemInstance>()
@@ -24,15 +31,18 @@ export class Inventory {
     }
   }
 
-  find(idOrfilter: string | Item.Instance) {
+  find(idOrfilter: string | ItemFilter): Item.ItemInstance[] {
     if (typeof idOrfilter == 'string') {
       return Array.from(this.items).filter((i) => i.id == idOrfilter)
     } else {
-      if (idOrfilter.state == undefined) {
-        return Array.from(this.items).filter((i) => i.id == idOrfilter.id && i.count == idOrfilter.count)
-      } else {
-        return Array.from(this.items).filter((i) => Item.same(i, idOrfilter))
+      let found = Array.from(this.items).filter((i) => i.id == idOrfilter.id)
+      if (idOrfilter.count != undefined) {
+        found = found.filter((i) => i.count == idOrfilter.count)
       }
+      if (idOrfilter.state != undefined) {
+        found = found.filter((i) => ObjectUtils.same(i.state, idOrfilter.state))
+      }
+      return found
     }
   }
 
@@ -55,6 +65,22 @@ export class Inventory {
     }
   }
 
+  consume(id: string, count?: number): this
+  consume(filter: ItemFilter, count?: number): this
+  consume(idOrFilter: string | ItemFilter, count = 1) {
+    if (typeof idOrFilter == 'string') {
+      this.consume({ id: idOrFilter })
+    } else {
+      const { id, state } = idOrFilter
+      const target = this.find({ id, state })[0]
+      if (target) {
+        target.count -= count
+        this.#cleanup()
+      }
+    }
+    return this
+  }
+
   remove(id: string): void
   remove(item: Item.Instance): void
   remove(filter: string | Item.Instance) {
@@ -72,6 +98,18 @@ export class Inventory {
 
   toPlainArray() {
     return this.toArray().map((i) => i.toPlainObject())
+  }
+
+  #cleanup() {
+    const prevCount = this.items.size
+    this.items.forEach((i) => {
+      if (i.count <= 0) {
+        this.items.delete(i)
+      }
+    })
+    if (this.items.size < prevCount) {
+      this.#changed()
+    }
   }
 
   *[Symbol.iterator]() {

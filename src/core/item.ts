@@ -117,7 +117,6 @@ export namespace Item {
 
   export function same(item1: Instance, item2: Instance): boolean {
     if (item1.id != item2.id) return false
-    if (item1.count != item2.count) return false
     if (ObjectUtils.same(item1.state, item2.state) == false) return false
     return true
   }

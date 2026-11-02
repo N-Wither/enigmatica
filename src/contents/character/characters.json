@@ -1,14 +1,25 @@
 [
   {
     "id": "aac",
-    "name": "Aachen"
+    "name": "Aachen",
+    "description": "translate:character.aac.desc",
+    "avatars": {
+      "default": "image/avatars/aachen-default.webp"
+    }
   },
   {
     "id": "axv",
-    "name": "Archive Service"
+    "name": "Archive Service",
+    "avatars": {
+      "default": "image/avatars/default.png"
+    }
   },
   {
     "id": "ela",
-    "name": "Ella"
+    "name": "Ella",
+    "tags": ["player"],
+    "avatars": {
+      "default": "image/avatars/ella-default.webp"
+    }
   }
 ]

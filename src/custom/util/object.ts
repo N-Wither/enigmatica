@@ -8,7 +8,7 @@ export namespace ObjectUtils {
   }
 
   /** 
-   * Compare two objects, symbol-named properties will be ignored.
+   * Compare two objects recursively, symbol-named properties will be ignored.
    * @returns `true` if they have same property and values, `false` if not.
    */
   export function same(obj1: any, obj2: any): boolean {

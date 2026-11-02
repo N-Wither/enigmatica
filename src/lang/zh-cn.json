@@ -1,4 +1,5 @@
 {
+  "character.aac.desc": "摸鱼中",
   "error.unknown_node_type": "未知的对话节点类型：\"%s\"",
   "ui.send": "发送",
   "item.notepad": "记事本",
@@ -17,8 +18,8 @@
   "ui.inventory": "物品栏",
   "ui.worktable": "工作区",
   "ui.chat": "聊天",
-  "ui.show_chat": "展开聊天",
-  "ui.hide_chat": "收起聊天",
+  "ui.show_chat": ">>",
+  "ui.hide_chat": "<<",
   "ui.close_item": "关闭%s",
   "ui.item_unavailable": "此物品没有可打开的内容",
   "ui.inventory_empty": "物品栏为空。",

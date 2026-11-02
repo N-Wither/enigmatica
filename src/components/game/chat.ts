@@ -2,6 +2,7 @@ import { css, html, LitElement, nothing, type PropertyValues } from 'lit'
 import { keyed } from 'lit/directives/keyed.js'
 import type { GameEngine } from '../../core/engine'
 import type { ChatHistoryEntry } from '../../core/dialogue'
+import type { MessageDialogNode } from '../../core/types'
 import { AssetManager } from '../../core/asset'
 import { translate } from '../../custom/translate'
 import './dialog-node'
@@ -87,16 +88,34 @@ export class EgChatElement extends LitElement {
     catch (error) { this.feedback = error instanceof Error ? error.message : String(error) }
   }
 
+  #message(node: MessageDialogNode, literalText = false) {
+    const character = this.engine!.getCharacter(node.speaker)
+    return html`<eg-dialognode .node=${node} .character=${character}
+      .isPlayer=${character?.tags?.includes('player') ?? false} .literalText=${literalText}></eg-dialognode>`
+  }
+
   #history(entry: ChatHistoryEntry) {
     const engine = this.engine!
     const node = engine.getDialogue(entry.dialogueId)?.nodes[entry.id]
     if (!node) return nothing
-    if (entry.kind === 'message' && node.type === 'message') {
-      return html`<eg-dialognode .node=${node} .character=${engine.getCharacter(node.speaker)}></eg-dialognode>`
+    if (entry.kind === 'message' && node.type === 'message') return this.#message(node)
+    let response: string | undefined
+    let as: string | undefined
+    if (entry.kind === 'choice' && node.type === 'choice') {
+      const option = node.options.find(option => option.id === entry.optionId)
+      response = option?.text
+      as = option?.as
+    } else if (entry.kind === 'input' && node.type === 'input') {
+      response = entry.userInput
+      as = node.as
     }
-    const response = entry.kind === 'choice' && node.type === 'choice'
-      ? node.options.find(option => option.id === entry.optionId)?.text : entry.userInput
-    return response === undefined ? nothing : html`<div part="response">${entry.kind === 'choice' ? translate(response) : response}</div>`
+    if (response === undefined) return nothing
+    const speaker = as === undefined ? engine.getPlayerCharacter()?.id : as
+    if (speaker !== undefined) {
+      return this.#message({ type: 'message', speaker, text: response }, entry.kind === 'input')
+    }
+    // Content without a player character can still show responses from old saves.
+    return html`<div part="response">${entry.kind === 'choice' ? translate(response) : response}</div>`
   }
 
   override render() {
@@ -133,6 +152,7 @@ export class EgChatElement extends LitElement {
         ${node && current ? keyed(current.id + ':' + current.currentNode, html`
           <eg-dialognode .node=${node} .active=${true} .messageRecorded=${recorded}
             .character=${node.type === 'message' ? engine.getCharacter(node.speaker) : undefined}
+            .isPlayer=${node.type === 'message' && (engine.getCharacter(node.speaker)?.tags?.includes('player') ?? false)}
             .options=${engine.getDialogueOptions()}
             @continue=${() => this.#perform(() => { engine.advanceDialogue() })}
             @choice=${(event: CustomEvent<{ id: string }>) => this.#perform(() => { engine.chooseDialogueOption(event.detail.id) })}
