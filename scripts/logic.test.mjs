@@ -878,3 +878,332 @@ test('responses without a player retain the fallback bubble, while explicit as s
     chat.disconnect()
   }
 })
+
+
+const automatic = (id, extra = {}) => ({
+  id, name: id, characterId: 'guide', startNode: 'hello',
+  nodes: { hello: { speaker: 'guide', text: id } }, ...extra,
+})
+const autoEngine = (dialogues, initial = {}, events = []) => new GameEngine({
+  characters: [guide], dialogues, events,
+}, { unlockedCharacters: ['guide'], ...initial })
+
+test('dialogue conditions filter availability, reject direct starts and do not interrupt active runs', () => {
+  const engine = autoEngine([automatic('gated', { condition: flag('ready') })])
+  assert.deepEqual(engine.getAvailableDialogues('guide'), [])
+  const before = engine.state
+  assert.throws(() => engine.startDialogue('gated'), /start condition/)
+  assert.deepEqual(engine.state, before)
+  engine.applyEffects([setFlag('ready')])
+  assert.equal(engine.getAvailableDialogues('guide').length, 1)
+  engine.startDialogue('gated')
+  engine.applyEffects([setFlag('ready', false)])
+  assert.equal(engine.state.dialogue.id, 'gated')
+  engine.advanceDialogue()
+  assert.equal(engine.state.dialogue, null)
+})
+
+test('auto starts wait for settled event chains, respect locks, order and active conversations', () => {
+  const engine = autoEngine([
+    automatic('locked', { characterId: 'missing', autoStart: true }),
+    automatic('first', { autoStart: true, condition: flag('ready') }),
+    automatic('second', { autoStart: true }),
+  ], {}, [event('prepare', { type: 'stateChange' }, [setFlag('ready')])])
+  assert.equal(engine.state.dialogue.id, 'first')
+  engine.applyEffects([setFlag('unrelated')])
+  assert.equal(engine.state.dialogue.id, 'first')
+  engine.advanceDialogue()
+  assert.equal(engine.state.dialogue.id, 'second')
+  engine.advanceDialogue()
+  assert.equal(engine.state.dialogue, null)
+  const locked = autoEngine([automatic('unlock', { autoStart: true })], { unlockedCharacters: [] })
+  assert.equal(locked.state.dialogue, null)
+  locked.applyEffects([{ type: 'unlockCharacter', id: 'guide' }])
+  assert.equal(locked.state.dialogue.id, 'unlock')
+})
+
+test('repeatable auto starts consume each true period, survive save/abort and allow manual replay', () => {
+  const content = automatic('repeat', { autoStart: true, repeatable: true, condition: flag('ready') })
+  const engine = autoEngine([content], { flags: { ready: true } })
+  engine.endDialogue()
+  engine.applyEffects([setFlag('unrelated')])
+  assert.equal(engine.state.dialogue, null)
+  assert.deepEqual(engine.state.autoStartConsumed, ['repeat'])
+  const saved = engine.state
+  saved.autoStartConsumed.push('detached')
+  assert.deepEqual(engine.state.autoStartConsumed, ['repeat'])
+  const restored = autoEngine([content], engine.state)
+  assert.equal(restored.state.dialogue, null)
+  restored.startDialogue('repeat')
+  restored.advanceDialogue()
+  assert.equal(restored.state.dialogue, null)
+  restored.applyEffects([setFlag('ready', false)])
+  assert.deepEqual(restored.state.autoStartConsumed, [])
+  restored.applyEffects([setFlag('ready')])
+  assert.equal(restored.state.dialogue.id, 'repeat')
+  const legacy = { ...restored.state }
+  delete legacy.autoStartConsumed
+  const oldSave = autoEngine([content], legacy)
+  oldSave.endDialogue()
+  assert.equal(oldSave.state.dialogue, null)
+})
+
+test('unconditional repeatable auto dialogue runs once automatically', () => {
+  const engine = autoEngine([automatic('once-per-period', { autoStart: true, repeatable: true })])
+  engine.advanceDialogue()
+  engine.dispatchAction({ name: 'tick' })
+  assert.equal(engine.state.dialogue, null)
+  engine.startDialogue('once-per-period')
+  engine.advanceDialogue()
+  assert.equal(engine.state.completedDialogues.length, 2)
+})
+
+test('action starts rearm after dispatch and do not queue expired actions while busy', () => {
+  const engine = autoEngine([
+    automatic('manual'),
+    automatic('action', { autoStart: true, repeatable: true, condition: { type: 'action', name: 'inspect' } }),
+  ])
+  engine.startDialogue('manual')
+  engine.dispatchAction({ name: 'inspect' })
+  engine.endDialogue()
+  assert.equal(engine.state.dialogue, null)
+  for (let i = 0; i < 2; i++) {
+    engine.dispatchAction({ name: 'inspect' })
+    assert.equal(engine.state.dialogue.id, 'action')
+    assert.equal(engine.state.autoStartConsumed.includes('action'), false)
+    engine.advanceDialogue()
+    assert.equal(engine.state.dialogue, null)
+  }
+})
+
+test('variable add publishes once and unlocks a conditioned auto dialogue', () => {
+  const engine = autoEngine([automatic('counted', { autoStart: true,
+    condition: { type: 'variable', id: 'count', op: '>=', value: 2 } })])
+  let notifications = 0
+  engine.subscribe(() => notifications++)
+  engine.applyEffects([{ type: 'setVariable', id: 'count', value: 2, operation: 'add' }])
+  assert.equal(notifications, 1)
+  assert.equal(engine.state.dialogue.id, 'counted')
+})
+
+// A deterministic clock avoids real waits and works with the project's Node 20 minimum.
+function dialogueClock(t) {
+  let now = 0, sequence = 0
+  const timers = new Map()
+  t.mock.method(globalThis, 'setTimeout', (callback, delay) => {
+    const id = ++sequence
+    timers.set(id, { callback, at: now + delay })
+    return id
+  })
+  t.mock.method(globalThis, 'clearTimeout', id => timers.delete(id))
+  return {
+    get size() { return timers.size },
+    tick(milliseconds) {
+      const end = now + milliseconds
+      let iterations = 0
+      while (true) {
+        const entry = [...timers].sort((a, b) => a[1].at - b[1].at)[0]
+        if (!entry || entry[1].at > end) break
+        assert.ok(++iterations < 1000, 'Timer loop')
+        now = entry[1].at
+        timers.delete(entry[0])
+        entry[1].callback()
+      }
+      now = end
+    },
+  }
+}
+async function timedChat(t, extra = {}) {
+  const chat = new TestChat()
+  chat.engine = autoEngine([automatic('timed', { autoAdvance: 1, ...extra })])
+  chat.engine.startDialogue('timed')
+  chat.connect()
+  await chat.updateComplete
+  t.after(() => chat.disconnect())
+  return chat
+}
+
+test('auto advance preserves deadlines across unrelated updates and advances background/self-loop messages', async t => {
+  const clock = dialogueClock(t)
+  const chat = await timedChat(t, { nodes: {
+    hello: { speaker: 'guide', text: 'Loop', next: 'hello' },
+  } })
+  clock.tick(600)
+  chat.engine.applyEffects([setFlag('tick')])
+  chat.currentCharacter = 'other'
+  await chat.updateComplete
+  clock.tick(399)
+  assert.equal(chat.engine.state.chatHistory.guide.length, 1)
+  clock.tick(1)
+  assert.equal(chat.engine.state.chatHistory.guide.length, 2)
+  clock.tick(1000)
+  assert.equal(chat.engine.state.chatHistory.guide.length, 3)
+  assert.equal(clock.size, 1)
+})
+
+test('manual continue resets auto interval; choices and input wait, terminal messages complete', async t => {
+  const clock = dialogueClock(t)
+  const chat = await timedChat(t, { nodes: {
+    hello: { speaker: 'guide', text: 'Start', next: 'next' },
+    next: { speaker: 'guide', text: 'Next', next: 'choose' },
+    choose: { type: 'choice', options: [{ id: 'go', text: 'Go', next: 'ask' }] },
+    ask: { type: 'input', next: 'route' },
+    route: { type: 'router', targets: ['end'] },
+    end: { speaker: 'guide', text: 'Done' },
+  } })
+  clock.tick(800)
+  chat.engine.advanceDialogue()
+  clock.tick(200)
+  assert.equal(chat.engine.state.dialogue.currentNode, 'next')
+  clock.tick(800)
+  assert.equal(chat.engine.state.dialogue.currentNode, 'choose')
+  assert.equal(clock.size, 0)
+  clock.tick(5000)
+  chat.engine.chooseDialogueOption('go')
+  assert.equal(clock.size, 0)
+  chat.engine.submitDialogueInput('reply')
+  assert.equal(chat.engine.state.dialogue.currentNode, 'end')
+  clock.tick(1000)
+  assert.equal(chat.engine.state.dialogue, null)
+  assert.equal(clock.size, 0)
+})
+
+test('auto timers clean up on engine replacement/disconnect and reconnect waits a full interval', async t => {
+  const clock = dialogueClock(t)
+  const chat = await timedChat(t)
+  const old = chat.engine
+  clock.tick(600)
+  chat.disconnect()
+  assert.equal(clock.size, 0)
+  clock.tick(5000)
+  assert.equal(old.state.dialogue.id, 'timed')
+  chat.connect()
+  await chat.updateComplete
+  clock.tick(999)
+  assert.equal(old.state.dialogue.id, 'timed')
+  const next = autoEngine([automatic('replacement', { autoAdvance: 1 })])
+  next.startDialogue('replacement')
+  chat.engine = next
+  await chat.updateComplete
+  clock.tick(1)
+  assert.equal(next.state.dialogue.id, 'replacement')
+  clock.tick(999)
+  assert.equal(next.state.dialogue, null)
+  assert.equal(old.state.dialogue.id, 'timed')
+})
+
+test('invalid auto intervals do not schedule, and a failing node reports once without automatic retries', async t => {
+  const clock = dialogueClock(t)
+  for (const interval of [undefined, 0, -1, NaN, Infinity]) {
+    const chat = await timedChat(t, { autoAdvance: interval })
+    assert.equal(clock.size, 0)
+    chat.disconnect()
+  }
+  const chat = await timedChat(t, { nodes: { hello: { speaker: 'guide', text: 'Bad', next: 'missing' } } })
+  clock.tick(1000)
+  assert.match(chat.feedback, /Unknown dialogue node/)
+  assert.equal(clock.size, 0)
+  chat.engine.applyEffects([setFlag('unrelated')])
+  await chat.updateComplete
+  clock.tick(5000)
+  assert.equal(clock.size, 0)
+  assert.match(chat.feedback, /Unknown dialogue node/)
+})
+
+
+test('custom auto-start entry effects remain in the outer update and variable add zero is a no-op', () => {
+  const engine = autoEngine([automatic('custom-entry', {
+    autoStart:true, condition:flag('ready'),
+    nodes:{hello:{speaker:'guide',text:'Hello',effects:[{type:'custom',method:'nested'}]}},
+  })])
+  engine.customMethods.set('nested', value => value.applyEffects([
+    {type:'setVariable',id:'entries',value:1,operation:'add'},
+  ]))
+  let notifications = 0
+  engine.subscribe(() => notifications++)
+  engine.applyEffects([setFlag('ready')])
+  assert.equal(engine.state.dialogue.id, 'custom-entry')
+  assert.equal(engine.state.variables.entries, 1)
+  assert.equal(notifications, 1)
+  engine.applyEffects([{type:'setVariable',id:'entries',value:0,operation:'add'}])
+  assert.equal(notifications, 1)
+})
+
+
+test('localized input gates prefer matched targets over next and otherwise use the default jump', t => {
+  const previousDocument = globalThis.document
+  t.after(() => { globalThis.document = previousDocument })
+  for (const [lang, text, matched, expected] of [
+    ['en-US', '  The ARCHIVE is here  ', true, 'First'],
+    ['zh-CN', '  查阅档案  ', true, 'First'],
+    ['zh-CN', 'archive', false, 'Second'],
+    ['en-US', 'no matching keyword', false, 'Second'],
+  ]) {
+    globalThis.document = { documentElement: { lang } }
+    const ask = { type:'input', next:'second', gates:[
+      { keywords:['  translate:keyword.archive  '], target:'first' },
+    ] }
+    const engine = dialogueEngine([{ ...inputDialogue, nodes:{ ...inputDialogue.nodes, ask } }])
+    engine.startDialogue('input')
+    const result = engine.submitDialogueInput(text)
+    assert.equal(result.accepted, true)
+    assert.equal(result.matched, matched)
+    assert.equal(result.node.text, expected)
+    assert.equal(engine.state.chatHistory.guide[0].userInput, text.trim())
+  }
+})
+
+test('input keywords resolve localization at submission time and unmatched gated inputs without next allow retry', t => {
+  const previousDocument = globalThis.document
+  t.after(() => { globalThis.document = previousDocument })
+  globalThis.document = { documentElement: { lang:'en-US' } }
+  const ask = { type:'input', gates:[{ keywords:['translate:keyword.archive'], target:'first' }] }
+  const engine = dialogueEngine([{ ...inputDialogue, nodes:{ ...inputDialogue.nodes, ask } }])
+  engine.startDialogue('input')
+  assert.equal(engine.submitDialogueInput('档案').matched, false)
+  assert.equal(engine.state.dialogue.currentNode, 'ask')
+  globalThis.document.documentElement.lang = 'zh-CN'
+  assert.equal(engine.submitDialogueInput('档案').matched, true)
+  assert.equal(engine.getCurrentDialogueNode().text, 'First')
+  assert.deepEqual(engine.state.chatHistory.guide.filter(entry => entry.kind === 'input').map(entry => entry.userInput), ['档案', '档案'])
+})
+
+test('missing keyword translations match the stripped key and empty localized keywords never match', t => {
+  const previousDocument = globalThis.document
+  t.after(() => { globalThis.document = previousDocument })
+  for (const lang of ['en-US', 'zh-CN']) {
+    globalThis.document = { documentElement: { lang } }
+    const ask = { type:'input', next:'second', gates:[
+      { keywords:['translate:', '  '], target:'missing' },
+      { keywords:[' translate:missing.keyword ', 'translate:toString'], target:'first' },
+    ] }
+    for (const [text, matched, expected] of [
+      ['This is MISSING.KEYWORD', true, 'First'],
+      ['TOSTRING', true, 'First'],
+      ['ordinary reply', false, 'Second'],
+    ]) {
+      const engine = dialogueEngine([{ ...inputDialogue, nodes:{ ...inputDialogue.nodes, ask } }])
+      engine.startDialogue('input')
+      const result = engine.submitDialogueInput(text)
+      assert.equal(result.matched, matched)
+      assert.equal(result.node.text, expected)
+    }
+  }
+})
+
+test('localized gate and default targets are validated before recording a reply or executing effects', t => {
+  const previousDocument = globalThis.document
+  t.after(() => { globalThis.document = previousDocument })
+  globalThis.document = { documentElement: { lang:'en-US' } }
+  for (const [target, next, text] of [
+    ['missing', 'first', 'ARCHIVE'],
+    ['first', 'missing', 'unmatched'],
+  ]) {
+    const ask = { type:'input', next, gates:[{ keywords:['translate:keyword.archive'], target }] }
+    const engine = dialogueEngine([{ ...inputDialogue, nodes:{ ...inputDialogue.nodes, ask } }])
+    engine.startDialogue('input')
+    const before = engine.state
+    assert.throws(() => engine.submitDialogueInput(text), /Unknown dialogue node/)
+    assert.deepEqual(engine.state, before)
+  }
+})

@@ -15,6 +15,7 @@ const engine = new GameEngine(
     inventory: [
       {id: 'notepad', count: 1},
       {id: 'docfile', count: 1, state: { content: 'translate:content.demo_docfile_1' }},
+      {id: 'docfile', count: 1, state: { content: 'translate:content.demo_docfile_2' }},
     ]
   },
 )

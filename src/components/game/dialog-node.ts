@@ -1,6 +1,6 @@
 import { css, html, LitElement, nothing } from 'lit'
 import type { CalculatedDialogChoiceOption, Character, DialogueNode } from '../../core/types'
-import { translate } from '../../custom/translate'
+import { localize, translate } from '../../custom/translate'
 import { AssetManager } from '../../core/asset'
 
 /** Presentational node: the owning chat handles all state changes and effects. */
@@ -18,7 +18,7 @@ export class EgDialogNodeElement extends LitElement {
   static styles = css`
     :host { display: block; margin-block: .75rem; font: inherit; }
     :host([isplayer]) [part=wrapper] { justify-content: flex-end; }
-    :host([isplayer]) [part=speaker] { text-align: right; }
+    :host([isplayer]) [part=speaker] { text-align: end; }
     [part=wrapper] { display: flex; gap: .75rem; align-items: flex-start; }
     [part=avatar] { flex-shrink: 0; width: 3rem; height: 3rem; border-radius: 50%; object-fit: cover; }
     [part=message] { min-width: 0; text-align: start; padding: 0.3rem; border-radius: .75rem; max-width: 36rem; overflow-wrap: anywhere; }
@@ -69,7 +69,7 @@ export class EgDialogNodeElement extends LitElement {
             </div>
             ${(avatar && this.isPlayer) ? image : nothing}
           </div>`}
-          ${this.active ? html`<button part="continue" @click=${() => this.emit('continue')}>${translate('translate:ui.continue')}</button>` : nothing}
+          ${this.active ? html`<button part="continue" @click=${() => this.emit('continue')}>${localize('ui.continue')}</button>` : nothing}
         `
       }
       case 'choice':
@@ -93,13 +93,13 @@ export class EgDialogNodeElement extends LitElement {
                 this.dispatchInput()
               }
             }} />
-          <button type="submit">${translate('translate:ui.send')}</button>
+          <button type="submit">${localize('ui.send')}</button>
         </form></div>` : nothing
       case 'router': {
         return nothing
       }
       default:
-        return html`<div>${translate('translate:error.unknown_node_type', (node as DialogueNode).type)}</div>`
+        return html`<div>${localize('error.unknown_node_type', (node as DialogueNode).type)}</div>`
     }
   }
 

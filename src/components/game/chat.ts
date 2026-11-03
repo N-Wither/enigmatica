@@ -1,10 +1,10 @@
 import { css, html, LitElement, nothing, type PropertyValues } from 'lit'
 import { keyed } from 'lit/directives/keyed.js'
-import type { GameEngine } from '../../core/engine'
+import type { GameEngine, GameState } from '../../core/engine'
 import type { ChatHistoryEntry } from '../../core/dialogue'
 import type { MessageDialogNode } from '../../core/types'
 import { AssetManager } from '../../core/asset'
-import { translate } from '../../custom/translate'
+import { localize, translate } from '../../custom/translate'
 import './dialog-node'
 
 export class EgChatElement extends LitElement {
@@ -30,6 +30,8 @@ export class EgChatElement extends LitElement {
     button { font: inherit; padding: .5rem .75rem; background: white; border: 1px solid #ccd5e3; border-radius: .5rem; cursor: pointer; }
     button:disabled { cursor: default; opacity: .5; }
     [part=dialogue-list] { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
+    [part=dialogue-list] button { flex-grow: 1; transition-duration: 0.2s; }
+    [part=dialogue-list] button:is(:hover, :focus) { background-color: #00000011; }
     [part=response] { margin: .75rem 0 .75rem auto; padding: .75rem 1rem; width: fit-content; max-width: 85%; white-space: pre-wrap; overflow-wrap: anywhere; background: #dce7fa; border-radius: .75rem; }
     [role=status] { color: #5c6b80; }
     :focus-visible { outline: 2px solid #365fa4; outline-offset: 2px; }
@@ -45,6 +47,8 @@ export class EgChatElement extends LitElement {
   private declare feedback: string
   #observedEngine?: GameEngine
   #unsubscribe?: () => void
+  #advanceTimer?: ReturnType<typeof setTimeout>
+  #advanceKey?: string
 
   constructor() {
     super()
@@ -58,6 +62,7 @@ export class EgChatElement extends LitElement {
   }
 
   override disconnectedCallback(): void {
+    this.#clearAutoAdvance()
     this.#unsubscribe?.()
     this.#unsubscribe = undefined
     this.#observedEngine = undefined
@@ -77,10 +82,53 @@ export class EgChatElement extends LitElement {
   #observeEngine(): void {
     if (this.#observedEngine === this.engine) return
     this.#unsubscribe?.()
+    this.#clearAutoAdvance()
     this.#observedEngine = this.engine
-    this.#unsubscribe = this.engine?.subscribe(() => this.requestUpdate())
+    this.#unsubscribe = this.engine?.subscribe(state => {
+      this.#syncAutoAdvance(state)
+      this.requestUpdate()
+    })
+    this.#syncAutoAdvance()
     this.feedback = ''
     this.requestUpdate()
+  }
+
+  #clearAutoAdvance(): void {
+    clearTimeout(this.#advanceTimer)
+    this.#advanceTimer = undefined
+    this.#advanceKey = undefined
+  }
+
+  #syncAutoAdvance(state: GameState | undefined = this.engine?.state): void {
+    const engine = this.engine
+    const current = state?.dialogue
+    const dialogue = current && engine?.getDialogue(current.id)
+    const interval = dialogue?.autoAdvance
+    const node = current && engine?.getCurrentDialogueNode()
+    if (!this.isConnected || !engine || !state || this.#observedEngine !== engine || !current || !dialogue ||
+      node?.type !== 'message' || typeof interval !== 'number' || !Number.isFinite(interval) || interval <= 0) {
+      this.#clearAutoAdvance()
+      return
+    }
+    // Transcript length distinguishes actual revisits to the same message node.
+    const key = JSON.stringify([current.id, current.currentNode,
+      state.chatHistory[dialogue.characterId]?.length ?? 0, interval])
+    if (key === this.#advanceKey) return
+    this.#clearAutoAdvance()
+    this.#advanceKey = key
+    let remaining = interval * 1000
+    const schedule = () => {
+      const delay = Math.min(remaining, 2 ** 31 - 1)
+      this.#advanceTimer = setTimeout(() => {
+        if (!this.isConnected || this.engine !== engine || this.#advanceKey !== key) return
+        remaining -= delay
+        if (remaining > 0) { schedule(); return }
+        this.#advanceTimer = undefined
+        // Keep the key after a failure: unrelated renders must not retry a bad node.
+        this.#perform(() => { engine.advanceDialogue() })
+      }, delay)
+    }
+    schedule()
   }
 
   #perform(operation: () => void): void {
@@ -147,7 +195,7 @@ export class EgChatElement extends LitElement {
         })}
       </nav>
       <section part="chat-panel-wrapper">
-        ${selected ? html`<h2>${translate(selected.name)}</h2>` : html`<p>${translate('translate:ui.no_contacts')}</p>`}
+        ${selected ? html`<h2>${translate(selected.name)}</h2>` : html`<p>${localize('ui.no_contacts')}</p>`}
         <div part="history">${history.map(entry => this.#history(entry))}</div>
         ${node && current ? keyed(current.id + ':' + current.currentNode, html`
           <eg-dialognode .node=${node} .active=${true} .messageRecorded=${recorded}
@@ -158,19 +206,19 @@ export class EgChatElement extends LitElement {
             @choice=${(event: CustomEvent<{ id: string }>) => this.#perform(() => { engine.chooseDialogueOption(event.detail.id) })}
             @dialogue-input=${(event: CustomEvent<{ content: string }>) => this.#perform(() => {
               const result = engine.submitDialogueInput(event.detail.content)
-              if (!result.accepted) this.feedback = translate('translate:ui.empty_input')
-              else if (!result.matched && result.node === node) this.feedback = translate('translate:ui.input_retry')
+              if (!result.accepted) this.feedback = localize('ui.empty_input')
+              else if (!result.matched && result.node === node) this.feedback = localize('ui.input_retry')
             })}>
           </eg-dialognode>`) : nothing}
-        ${current && !active ? html`<p role="status">${translate('translate:ui.other_dialogue_active')}</p>` : nothing}
+        ${current && !active ? html`<p role="status">${localize('ui.other_dialogue_active')}</p>` : nothing}
         <p role="status" aria-live="polite">${this.feedback}</p>
         <div part="dialogue-list">
           ${engine.getAvailableDialogues(this.currentCharacter).map(dialogue => html`
             <button ?disabled=${!!current} @click=${() => this.#perform(() => { engine.startDialogue(dialogue.id) })}>
-              ${translate('translate:ui.start_dialogue', dialogue.id)}
+              ${translate(dialogue.name ?? dialogue.id)}
             </button>`)}
         </div>
-        ${selected && !current && !engine.getAvailableDialogues(this.currentCharacter).length ? html`<p>${translate('translate:ui.no_dialogues')}</p>` : nothing}
+        ${selected && !current && !engine.getAvailableDialogues(this.currentCharacter).length ? html`<p>${localize('ui.no_dialogues')}</p>` : nothing}
       </section>
     `
   }

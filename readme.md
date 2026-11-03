@@ -16,7 +16,59 @@ Game cycle:
 
 ## Managing Contents
 
-Put contents in `contents`, types are defined in `core/types.ts`.
+Author generated content in `generator/<category>/*.ts` or `*.js`. Each script
+must default-export one record (including a Builder) or an array of records.
+Scripts in the same directory merge in relative-path dictionary order; array
+order is preserved. Subdirectories generate independently. Output keeps the
+relative directory and uses its final directory name plus `s.json`:
+`generator/dialogue/dialogue_1.ts` and `dialogue_2.ts` both produce
+`contents/dialogue/dialogues.json`. The `item` directory instead produces
+`metadata.json`.
+
+Run `npm run generate-contents` separately, or let `dev` and `build` generate
+automatically. Commit generated JSON alongside its source scripts; edit the
+scripts for subsequent changes. Unchanged JSON is not rewritten. Compilation,
+execution, invalid exports, serialization errors, and duplicate IDs within an
+output stop generation before any JSON is replaced. Handwritten contents are
+preserved. Removing the last script in a directory does not delete its old JSON;
+remove obsolete generated files explicitly.
+
+Do not place entry scripts directly in `generator`. Every `.js`/`.ts` file
+there is an entry; `.d.ts` files are ignored. Put shared helper modules outside
+this tree. Import the pure `ContentMaker` module directly so generation works
+without pre-existing JSON:
+
+```ts
+import { ContentMaker as C } from '../../core/content-maker'
+
+export default C.dialogue('arrival')
+  .setName('Arrival')
+  .setCharacter('guide')
+  .setStartNode('hello')
+  .setCondition({ type: 'flag', id: 'arrived', value: true })
+  .setAutoStart(true)
+  .setAutoAdvance(2)
+  .addNode('hello', C.message('guide', 'Welcome.').setNext('reply'))
+  .addNode('reply', C.choice()
+    .addOption(C.option('go', 'Continue', 'end').setAs('player')))
+  .addNode('end', C.message('guide', 'Good luck.'))
+```
+
+Dialogue builders also offer `setRepeatable`; all retain `toJson()` and support
+standard `toJSON()`, so explicit conversion is optional. `addNode` accepts
+both typed node objects and builders. All node builders offer `setNext` and
+`addEffect(...effects)`. Additional factories and methods:
+
+- `message(speaker, text)`: `setEmotion`.
+- `choice()`: `addOption(option)`.
+- `option(id, text, next)`: `setAs`, `setCondition`,
+  `setIfConditionNotMet('remove' | 'disable')`, `addEffect`.
+- `input()`: `setPlaceholder`, `setValue`, `setAs`,
+  `addGate(keywords, target)`.
+- `router()`: `addTarget(id, weight?)`; omitted weight defaults to one.
+
+The two files in `generator/dialogue` demonstrate all four node kinds.
+`ContentMaker` remains re-exported from `contents/contents.ts` for existing callers.
 
 **NOTE:** Items (common items, files etc.) are defined in various files, `contents/item/metadata.json` contains the item info for basic game logic, while some item has own component element because they may be interactive, these logic cannot be simply defined by `json` files. Item contents are wrapped in `GameItemElement` (found in `components/game-item.ts`), you can extend this class to create your own item component element.
 
@@ -46,16 +98,20 @@ one dialogue can run at a time; switching contacts preserves its progress.
 
 - `getCharacter(id)`, `getDialogue(id)`: look up content in this engine.
 - `getAvailableDialogues(characterId)`: list uncompleted or repeatable dialogues
-  for an unlocked contact. Start buttons are disabled while a dialogue is active.
+  for an unlocked contact whose start conditions currently pass. Start buttons are
+  disabled while a dialogue is active.
 - `startDialogue(id)`: reject locked characters, completed nonrepeatable
-  dialogues, and attempts to replace an active dialogue.
+  dialogues, unmet start conditions, and attempts to replace an active dialogue.
 - `advanceDialogue()`: advance a message; a terminal message completes only
-  when the player continues.
+  when acknowledged manually or by automatic advancement.
 - `getDialogueOptions()`: calculate `normal`, `disable`, or `remove`
   presentation. `chooseDialogueOption(id)` checks the condition again.
 - `submitDialogueInput(content)`: return `{ accepted, matched, node }`.
   Blank input is rejected. Trimmed, case-insensitive input matches the first
-  gate containing any nonempty keyword. An unmatched input follows `next`
+  gate containing any nonempty keyword. Keywords starting with `translate:` are
+  resolved in the current language before matching; missing translations use the
+  key without that prefix. Translation results are trimmed and matched without
+  case sensitivity; blank keywords never match. An unmatched input follows `next`
   when present, otherwise stays active for retry. Without gates, submission
   follows `next` or completes. `matched` means a gate matched, not merely
   that the input was accepted. Invalid targets throw before recording a response
@@ -63,49 +119,28 @@ one dialogue can run at a time; switching contacts preserves its progress.
 - `endDialogue()`: abort without marking completed; restarting is allowed.
 
 Node effects execute once on each actual entry (including revisits); option
-effects execute only on a successful choice. Use `message`, `choice`, `input`,
-and `router` nodes; no separate end node is required. Omit a message's `next` to
+effects execute only on a successful choice. Use `message`, `choice`, and
+`input` nodes, plus automatic `router` nodes; no separate end node is required. Omit a message's `next` to
 finish after acknowledgement. A choice's destinations belong to its options.
-Omitting a node's `type` defaults to `message`; the engine normalizes a copy
-of its content, including engine-local dialogues. Other node types must be
-explicit. Unknown explicit types do not fall back to messages.
-`repeatable` defaults to false.
+`repeatable` defaults to false. A dialogue's `condition` is checked only when
+starting; later changes do not interrupt an active run.
 
-A `router` immediately chooses a destination from `targets` using relative
-random weights, without showing a bubble or adding a transcript entry:
+`autoStart` defaults to false. Eligible unlocked contacts are checked after
+initialization and settled game updates; the first eligible dialogue in content
+order starts when no dialogue is active. Each satisfied-condition period permits
+one start, including manual starts. The condition must become false before it
+can automatically trigger again; unconditional repeatable dialogues auto-start
+only once. Busy conversations are not replaced, and expired action conditions
+are not queued. `state.autoStartConsumed` persists this behavior across saves;
+older saves without the field remain supported.
 
-```json
-{
-  "type": "router",
-  "targets": ["common", { "id": "rare", "weight": 0.25 }]
-}
-```
-
-String targets and objects without `weight` use weight 1. Zero excludes a
-target; weights must be finite nonnegative numbers. Empty/all-zero targets or
-unknown destination IDs throw an error naming the dialogue and router; `next`
-is not a fallback. Each encountered router validates all of its destinations.
-The chosen chain is validated before recording a response or executing effects,
-so a route error leaves game state unchanged. Successful router effects execute
-once per entry, in path order, followed by the final node's effects. At most 100
-consecutive automatic jumps are allowed per transition.
-
-Messages whose speaker's character has the exact `player` tag align to the
-right, with the avatar on the right and the name right-aligned. Untagged or
-unknown speakers remain on the left. This applies to historical and current
-messages; the contact owning the dialogue does not determine alignment.
-
-Choice options and input nodes accept `as: "character-id"` to specify the
-speaker of the selected option or submitted reply. If omitted, the first
-character with the exact `player` tag in content order is used, regardless of
-whether that character is unlocked as a contact (`getPlayerCharacter()`).
-Responses use the same name, default avatar, and alignment as message nodes.
-Explicit unknown IDs display as the speaker name without an avatar. If both
-`as` and a default player are absent, the existing plain response bubble is
-used. Choice text is localized; submitted input is always displayed literally,
-including text beginning with `translate:`. Accepted retry inputs remain in
-order. These are presentation-only message nodes: they add no acknowledgement
-button, do not execute effects, and retain the existing saved history format.
+A finite positive `autoAdvance` specifies seconds between message advances,
+including terminal acknowledgement. Choice and input nodes wait for the player;
+routers resolve immediately. Continue advances immediately and resets the next
+message's interval. Switching contacts and collapsing chat do not pause timers
+or force another contact open. Disconnecting chat clears its timer; reconnecting
+waits a full interval. Replacing its engine also clears old timers. Automatic
+advance errors appear in chat feedback and do not repeatedly retry that node.
 
 `state.chatHistory[characterId]` is an ordered transcript. Entries contain
 `dialogueId`, node `id`, and `kind`: `message`, `choice` (with
@@ -116,10 +151,7 @@ Content definitions must remain available to render past messages and choices.
 Save `engine.state` and pass it as the constructor's second argument to restore
 progress without replaying entry effects. Dialogue state and history are detached
 from snapshots. Old saves without history restore an empty transcript; earlier
-branches are not reconstructed. Restoring a settled node does not reroll routes
-or replay entry effects. A legacy save paused at a router continues routing,
-skipping that saved router's already-applied effects while applying newly
-entered nodes' effects. Automatic persistence is left to the game.
+branches are not reconstructed. Automatic persistence is left to the game.
 
 ## Game layout and workspace
 
@@ -151,16 +183,20 @@ connects these events automatically. Item actions also cross Shadow DOM and
 default their target to the owning inventory instance's ID. UI visibility does
 not dispatch game actions or enter saved game state.
 
+Item components should update their properties before calling `emit(name, details?)`.
+The shell passes the owning inventory instance to `dispatchAction(action, sourceItem?)`;
+the engine calls `syncStateFromElement()` before checking event conditions, within
+one update and notification. Only keys already declared in the instance's
+`state` (from `defaultState`, initial state, or `setState`) are read back.
+State values are copied so nested element properties and saved snapshots remain
+independent. Explicit action targets do not change which instance is synchronized.
+The notepad emits `content-change` on textarea change, and restores its content
+from saved state. Use `setState` for programmatic property changes.
+
 Desktop windows support title-bar dragging, raising, and closing. Below 1024px
 or in portrait orientation, they become independently collapsible list entries,
 and chat starts closed in a modal drawer. Desktop chat starts expanded. Chat
 preferences, window positions, and open/folded states are kept in memory only.
-Chat opens and closes over 200ms with ease-in-out timing: desktop columns resize
-together, while the compact drawer slides with a fading backdrop. Closing waits
-for the exit animation before closing the native dialog. Rapid reversals cancel
-previous animations, and resizing settles immediately in the new layout.
-Reduced-motion preferences disable these animations. Escape and backdrop
-closing preserve modal focus behavior and return focus to the toggle.
 Inventory `add`/`remove` mutations notify the engine and refresh connected views;
 direct edits to the underlying `items` Set bypass this notification mechanism.
 
@@ -187,8 +223,10 @@ Run build script:
 npm run build
 ```
 
-Every `.ts` file in `src` becomes a `.js` file at the same relative path.
-Other files are copied unchanged, including empty directories. Both commands
+Before compiling, content generators run automatically. Every `.ts` file in `src`
+outside `generator` becomes a `.js` file at the same relative path. The entire
+`src/generator` tree is excluded from both `dev` and `dist`.
+Other files outside that tree are copied unchanged, including empty directories. Both commands
 clean their output directory to remove stale files. Browser dependencies are
 bundled into shared modules under `_chunks`; development builds include inline
 source maps and production builds are minified. HTML module script URLs should

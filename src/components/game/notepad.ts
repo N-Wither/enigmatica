@@ -3,6 +3,10 @@ import { GameItemElement } from "../game-item";
 import { translate } from "../../custom/translate";
 
 class EgNotepadElement extends GameItemElement {
+  static properties = {
+    content: { type: String }
+  }
+
   static styles = css`
     :host {
       display: block;
@@ -22,10 +26,22 @@ class EgNotepadElement extends GameItemElement {
     }
   `
 
+  declare content: string
+
+  constructor() {
+    super()
+    this.content = ''
+  }
+
   render() {
     return html`
-    <textarea cols="24" rows="16" name=${translate('translate:item.notepad')}></textarea>
+    <textarea cols="24" rows="16" name=${translate('translate:item.notepad')} .value=${this.content} @change=${this.#onTextChange}></textarea>
     `
+  }
+
+  #onTextChange() {
+    this.content = this.renderRoot.querySelector('textarea')?.value ?? ''
+    this.emit('content-change')
   }
 }
 

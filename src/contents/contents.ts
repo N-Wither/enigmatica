@@ -1,11 +1,12 @@
 import type { Item } from '../core/item'
 import type { Character, Dialogue, GameEvent } from '../core/types'
 import c from './character/characters.json' with { type: 'json' }
-import d from './dialog/dialogs.json' with { type: 'json' }
+import d from './dialogue/dialogues.json' with { type: 'json' }
 import e from './event/events.json' with { type: 'json' }
 import i from './item/metadata.json' with { type: 'json' }
 
 const characters: Character[] = c
+//@ts-ignore
 const dialogues: Dialogue[] = d
 const events: GameEvent[] = e
 const items: Item.Metadata[] = i
@@ -17,7 +18,7 @@ export class WrappedCharacter implements Required<Character> {
   description = ''
   tags: string[] = []
   avatars: { [emotion: string]: string; default: string } = {
-    default: ''
+    default: '',
   }
 
   constructor(info?: Character) {
@@ -25,7 +26,7 @@ export class WrappedCharacter implements Required<Character> {
       this.id = info.id
       this.name = info.name
       info.description && (this.description = info.description)
-      info.avatars && (Object.assign(this.avatars, info.avatars))
+      info.avatars && Object.assign(this.avatars, info.avatars)
       info.tags && (this.tags = info.tags)
     }
   }
@@ -40,7 +41,7 @@ export class WrappedCharacter implements Required<Character> {
   static error(reason: string) {
     return new WrappedCharacter({
       id: '',
-      name: reason
+      name: reason,
     })
   }
 }
@@ -69,10 +70,6 @@ namespace ContentManager {
   }
 }
 
-export {
-  characters,
-  dialogues,
-  events,
-  items,
-  ContentManager
-}
+export { ContentMaker } from '../core/content-maker'
+
+export { characters, dialogues, events, items, ContentManager }

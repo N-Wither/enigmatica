@@ -12,7 +12,7 @@ const keyPrefix = 'translate:'
 
 const localizer = new Localizer(languages)
 
-/** Directly convert a translate key to localized string. */
+/** Directly convert a translate key to localized string. Designed for fixed content. */
 export function localize(string: string, ...replacements: unknown[]) {
   return localizer.translate(string, ...replacements)
 }

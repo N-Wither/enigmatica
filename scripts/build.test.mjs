@@ -25,6 +25,7 @@ test('build mirrors the source tree, compiles every TS entry and preserves asset
     async function verify(directory) {
       for (const entry of await readdir(directory, { withFileTypes: true })) {
         const source = path.join(directory, entry.name)
+        if (directory === sourceRoot && entry.name === 'generator') continue
         const destination = path.join(output, path.relative(sourceRoot, source).replace(/\.ts$/, '.js'))
         if (entry.isDirectory()) {
           assert.equal((await stat(destination)).isDirectory(), true)
@@ -38,6 +39,7 @@ test('build mirrors the source tree, compiles every TS entry and preserves asset
       }
     }
     await verify(sourceRoot)
+    await assert.rejects(stat(path.join(output, 'generator')), { code: 'ENOENT' })
     assert.ok((await readdir(path.join(output, '_chunks'))).some(name => name.endsWith('.js')))
     assert.doesNotMatch(await readFile(path.join(output, 'components/enigmatica-game.js'), 'utf8'), /from\s*["']lit["']/)
     await writeFile(path.join(output, '.stale-test-file'), 'stale')
@@ -125,6 +127,53 @@ test('dev serves files and reload events for additions, changes, renames and del
     await dev.close()
     assert.ok(fixture.startsWith(sourceRoot + path.sep))
     await rm(fixture, { recursive: true, force: true })
+    await buildProject({ development: true })
+  }
+})
+
+
+test('dev generates edited scripts, reloads once settled, excludes generators and preserves output on failure', async () => {
+  const generatorRoot = path.join(sourceRoot, 'generator')
+  const fixture = await mkdtemp(path.join(generatorRoot, '.build-test-'))
+  const relative = path.relative(generatorRoot, fixture)
+  const generated = path.resolve(sourceRoot, 'contents', relative)
+  const generatedFile = path.join(generated, 'dialogue/dialogues.json')
+  let dev
+  try {
+    await mkdir(path.join(fixture, 'dialogue'))
+    const entry = path.join(fixture, 'dialogue/entry.ts')
+    await writeFile(entry, 'export default {id:"before"}')
+    dev = await startDevServer({ port: 0 })
+    const url = '/contents/' + relative.split(path.sep).join('/') + '/dialogue/dialogues.json'
+    assert.deepEqual(await fetch(dev.url + url).then(response => response.json()), [{ id: 'before' }])
+    assert.equal((await fetch(dev.url + '/generator/' + relative + '/dialogue/entry.js')).status, 404)
+    await writeFile(entry, 'export default {id:"after"}')
+    await eventually(async () => (await fetch(dev.url + url).then(response => response.json()))[0].id === 'after')
+    await delay(400)
+    const output = path.join(projectRoot, 'dev', 'contents', relative, 'dialogue/dialogues.json')
+    const settled = (await stat(output)).mtimeMs
+    await delay(400)
+    assert.equal((await stat(output)).mtimeMs, settled, 'Generated writes must not cause a rebuild loop')
+    const reportedErrors = []
+    const reportError = console.error
+    console.error = (...args) => reportedErrors.push(args)
+    try {
+      await writeFile(entry, 'export default {')
+      await eventually(() => reportedErrors.length > 0)
+      assert.ok(reportedErrors.some(args => String(args[1]).includes('entry.ts')))
+      assert.deepEqual(JSON.parse(await readFile(generatedFile, 'utf8')), [{ id: 'after' }])
+      assert.deepEqual(await fetch(dev.url + url).then(response => response.json()), [{ id: 'after' }])
+      await writeFile(entry, 'export default {id:"fixed"}')
+      await eventually(async () => (await fetch(dev.url + url).then(response => response.json()))[0].id === 'fixed')
+    } finally {
+      console.error = reportError
+    }
+  } finally {
+    await dev?.close()
+    assert.ok(path.resolve(fixture).startsWith(path.resolve(generatorRoot) + path.sep))
+    assert.ok(generated.startsWith(path.resolve(sourceRoot, 'contents') + path.sep))
+    await rm(fixture, { recursive: true, force: true })
+    await rm(generated, { recursive: true, force: true })
     await buildProject({ development: true })
   }
 })

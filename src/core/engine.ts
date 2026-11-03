@@ -1,5 +1,6 @@
 import { items } from '../contents/contents'
 import { ObjectUtils } from '../custom/util/object'
+import { translate } from '../custom/translate'
 import type { ChatHistoryEntry, DialogueInputResult } from './dialogue'
 import { Inventory } from './inventory'
 import { Item } from './item'
@@ -29,6 +30,8 @@ export interface GameState {
   inventory: Item.Instance[]
   completedDialogues: StartedDialogueInfo[]
   chatHistory: Record<string, ChatHistoryEntry[]>
+  /** Dialogue starts consumed during the current satisfied-condition period. */
+  autoStartConsumed: string[]
 }
 
 export type CustomMethod = (engine: GameEngine, ...args: unknown[]) => unknown
@@ -50,6 +53,7 @@ export class GameEngine {
   readonly #inventory = new Inventory()
   readonly #completedDialogues: StartedDialogueInfo[]
   readonly #chatHistory: Record<string, ChatHistoryEntry[]>
+  readonly #autoStartConsumed: Set<string>
   readonly #customMethods = new Map<string, CustomMethod>
   #dialogue: GameState['dialogue']
   #action?: GameAction
@@ -81,6 +85,8 @@ export class GameEngine {
     })
     this.#completedDialogues = structuredClone(initialState.completedDialogues ?? [])
     this.#chatHistory = Object.assign(Object.create(null), structuredClone(initialState.chatHistory ?? {}))
+    this.#autoStartConsumed = new Set(initialState.autoStartConsumed)
+    if (this.#dialogue) this.#autoStartConsumed.add(this.#dialogue.id)
     const restored = this.#dialogue
     const path = restored && this.getCurrentDialogueNode()?.type === 'router'
       ? this.#resolveDialoguePath(restored.id, restored.currentNode) : undefined
@@ -103,6 +109,7 @@ export class GameEngine {
       dialogue: structuredClone(this.#dialogue),
       inventory: [...this.#inventory.toPlainArray()],
       completedDialogues: structuredClone(this.#completedDialogues),
+      autoStartConsumed: [...this.#autoStartConsumed],
       chatHistory: structuredClone(this.#chatHistory)
     }
   }
@@ -136,6 +143,7 @@ export class GameEngine {
   getAvailableDialogues(characterId: string): Dialogue[] {
     if (!this.#unlockedCharacters.has(characterId)) return []
     return [...this.#dialogues.values()].filter(dialogue => dialogue.characterId === characterId &&
+      (!dialogue.condition || this.checkCondition(dialogue.condition)) &&
       (dialogue.repeatable === true || !this.#completedDialogues.some(run => run.id === dialogue.id && run.done)))
   }
 
@@ -189,8 +197,11 @@ export class GameEngine {
     }
   }
 
-  dispatchAction(action: GameAction): void {
-    this.#update(() => {}, action)
+  dispatchAction(action: GameAction, sourceItem?: Item.ItemInstance): void {
+    if (sourceItem && !this.#inventory.items.has(sourceItem)) throw new Error('Action source is not in this inventory')
+    this.#update(() => {
+      if (sourceItem?.syncStateFromElement()) this.#changed = true
+    }, action)
   }
 
   applyEffects(effects: readonly Effect[]): void {
@@ -220,11 +231,17 @@ export class GameEngine {
     if (!this.#characters.has(dialogue.characterId) || !this.#unlockedCharacters.has(dialogue.characterId)) {
       throw new Error('Dialogue character is locked or unknown: ' + dialogue.characterId)
     }
+    if (dialogue.condition && !this.checkCondition(dialogue.condition)) {
+      throw new Error('Dialogue start condition is not met: ' + id)
+    }
     if (!this.getAvailableDialogues(dialogue.characterId).some(value => value.id === id)) {
       throw new Error('Dialogue is already completed: ' + id)
     }
     const path = this.#resolveDialoguePath(id, dialogue.startNode)
-    this.#update(() => this.#enterDialoguePath(id, path))
+    this.#update(() => {
+      this.#add(this.#autoStartConsumed, id)
+      this.#enterDialoguePath(id, path)
+    })
     return this.getCurrentDialogueNode()
   }
 
@@ -266,7 +283,7 @@ export class GameEngine {
     if (!text) return { accepted: false, matched: false, node }
     const normalized = text.toLowerCase()
     const gate = node.gates?.find(gate => gate.keywords.some(keyword => {
-      const key = keyword.trim().toLowerCase()
+      const key = translate(keyword.trim()).trim().toLowerCase()
       return key.length > 0 && normalized.includes(key)
     }))
     const target = gate?.target ?? node.next
@@ -294,6 +311,7 @@ export class GameEngine {
   }
 
   #update(operation: () => void, action?: GameAction): void {
+    if (this.#updating) { operation(); return }
     this.#changed = false
     this.#updating = true
     this.#action = action
@@ -303,6 +321,8 @@ export class GameEngine {
     } finally {
       this.#updating = false
       this.#action = undefined
+      // Action conditions expire after dispatch, including for repeatable auto-starts.
+      this.#rearmAutoStarts()
       this.#firedEvents.clear()
     }
     if (this.#changed) {
@@ -329,7 +349,30 @@ export class GameEngine {
           : event.trigger.type === 'action' && this.#action !== undefined && (event.trigger.action === undefined || event.trigger.action === this.#action.name)
         if (matches && this.#fireEvent(event.id)) progressed = true
       }
+      this.#rearmAutoStarts()
+      // Let all event chains settle before choosing the first eligible dialogue.
+      if (!progressed && !this.#dialogue) {
+        const candidate = [...this.#dialogues.values()].find(dialogue => dialogue.autoStart &&
+          !this.#autoStartConsumed.has(dialogue.id) && this.#characters.has(dialogue.characterId) &&
+          this.getAvailableDialogues(dialogue.characterId).some(value => value.id === dialogue.id))
+        if (candidate) {
+          const path = this.#resolveDialoguePath(candidate.id, candidate.startNode)
+          this.#add(this.#autoStartConsumed, candidate.id)
+          this.#enterDialoguePath(candidate.id, path)
+          progressed = true
+        }
+      }
     } while (progressed)
+  }
+
+  #rearmAutoStarts(): void {
+    for (const id of this.#autoStartConsumed) {
+      const condition = this.#dialogues.get(id)?.condition
+      if (condition && !this.checkCondition(condition)) {
+        this.#autoStartConsumed.delete(id)
+        this.#changed = true
+      }
+    }
   }
 
   #fireEvent(id: string): boolean {
@@ -359,11 +402,13 @@ export class GameEngine {
               this.#changed = true
             }
           } else if (effect.operation == 'add') {
+            const previous = this.#variables[effect.id]
             if (effect.id in this.#variables) {
               (this.#variables[effect.id] as number) += Number(effect.value)
             } else {
               this.#variables[effect.id] = Number(effect.value)
             }
+            if (!Object.is(previous, this.#variables[effect.id])) this.#changed = true
           }
           break
         case 'unlockItem': this.#add(this.#unlockedItems, effect.id); break

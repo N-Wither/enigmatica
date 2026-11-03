@@ -2,6 +2,7 @@ import { cp, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
+import { generateContents } from './generate-contents.mjs'
 
 export const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 export const sourceRoot = path.join(projectRoot, 'src')
@@ -10,6 +11,7 @@ export const sourceRoot = path.join(projectRoot, 'src')
 async function scan(directory, files = [], directories = []) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const filename = path.join(directory, entry.name)
+    if (directory === sourceRoot && entry.name === 'generator') continue
     if (entry.isDirectory()) {
       directories.push(filename)
       await scan(filename, files, directories)
@@ -23,6 +25,7 @@ async function scan(directory, files = [], directories = []) {
 }
 
 export async function buildProject({ development = false } = {}) {
+  await generateContents()
   const outputRoot = path.join(projectRoot, development ? 'dev' : 'dist')
   const { files, directories } = await scan(sourceRoot)
   const entries = files.filter(filename => filename.endsWith('.ts'))

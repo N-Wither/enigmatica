@@ -57,18 +57,23 @@ export namespace Item {
     setState(k: string, v: unknown): this
     setState(state: State): this
     setState(propOrState: string | State, value?: unknown) {
-      if (typeof propOrState == 'string') {
-        this.state[propOrState] = value
-        if (this.element != undefined) {
-          Reflect.set(this.element, propOrState, value)
-        }
-      } else {
-        Object.assign(this.state, propOrState)
-      }
+      const patch = typeof propOrState === 'string' ? { [propOrState]: value } : propOrState
+      Object.assign(this.state, structuredClone(patch))
       if (this.element) {
-        Object.assign(this.element, this.state)
+        Object.assign(this.element, structuredClone(this.state))
+        this.element.requestUpdate()
       }
       return this
+    }
+
+    /** Read only declared state keys; DOM internals never become saved state. */
+    syncStateFromElement(): boolean {
+      if (!this.element) return false
+      const next = Object.fromEntries(Object.keys(this.state).map(key => [key, Reflect.get(this.element!, key)]))
+      const detached = structuredClone(next)
+      const changed = !ObjectUtils.same(this.state, detached)
+      this.state = detached
+      return changed
     }
 
     toPlainObject() {

@@ -2,7 +2,10 @@
   {
     "id": "notepad",
     "name": "translate:item.notepad",
-    "element": "eg-notepad"
+    "element": "eg-notepad",
+    "defaultState": {
+      "content": ""
+    }
   },
   {
     "id": "docfile",

@@ -1,24 +1,27 @@
 [
   {
     "id": "greetings",
+    "name": "translate:dialogue.greetings",
     "characterId": "aac",
     "startNode": "hello",
-    "repeatable": false,
     "nodes": {
       "hello": {
+        "next": "reply-1",
         "speaker": "aac",
         "text": "早上好。",
-        "next": "reply-1"
+        "type": "message"
       },
       "reply-1": {
+        "next": "reply-2",
         "speaker": "ela",
         "text": "有什么事吗？",
-        "next": "reply-2"
+        "type": "message"
       },
       "reply-2": {
+        "next": "topics",
         "speaker": "aac",
         "text": "档案室里留有一条线索，想先了解哪件事？",
-        "next": "topics"
+        "type": "message"
       },
       "topics": {
         "type": "choice",
@@ -59,26 +62,31 @@
         ]
       },
       "hint": {
+        "next": "topics",
         "speaker": "aac",
         "text": "试试“档案”或 archive。现在可以选择回答了。",
-        "next": "topics"
+        "type": "message"
       },
       "question": {
+        "next": "wrong-keyword",
         "type": "input",
         "placeholder": "输入你想到的关键词",
         "gates": [
           {
             "keywords": [
-              "档案",
-              "archive"
+              "translate:keyword.archive"
             ],
             "target": "goodbye"
           }
         ]
       },
-      "goodbye": {
+      "wrong-keyword": {
+        "next": "question",
         "speaker": "aac",
-        "text": "找到了！之后可以再去问问档案服务。",
+        "text": "不对哦。",
+        "type": "message"
+      },
+      "goodbye": {
         "effects": [
           {
             "type": "discoverClue",
@@ -88,32 +96,45 @@
             "type": "unlockCharacter",
             "id": "axv"
           }
-        ]
+        ],
+        "speaker": "aac",
+        "text": "找到了！之后可以再去问问档案服务。",
+        "type": "message"
       }
-    }
+    },
+    "repeatable": false,
+    "autoStart": false
   },
   {
     "id": "axv-check-in",
+    "name": "translate:dialogue.axv-check-in",
     "characterId": "axv",
-    "startNode": "hello",
-    "repeatable": true,
+    "startNode": "entry",
     "nodes": {
+      "entry": {
+        "type": "router",
+        "targets": [
+          "hello"
+        ]
+      },
       "hello": {
-        "type": "message",
+        "next": "reply",
         "speaker": "axv",
         "text": "你可以随时回来找我。今天有什么发现？",
-        "next": "reply"
+        "type": "message"
       },
       "reply": {
+        "next": "goodbye",
         "type": "input",
-        "placeholder": "提交你的发现",
-        "next": "goodbye"
+        "placeholder": "提交你的发现"
       },
       "goodbye": {
-        "type": "message",
         "speaker": "axv",
-        "text": "我记下了，下次再聊。"
+        "text": "我记下了，下次再聊。",
+        "type": "message"
       }
-    }
+    },
+    "repeatable": true,
+    "autoStart": false
   }
 ]

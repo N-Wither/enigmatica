@@ -53,11 +53,17 @@ export type Effect =
 
 export interface Dialogue {
   id: string
+  name: string
   characterId: string
   startNode: string
   nodes: Record<string, DialogueNode>
   /** Default: `false` */
   repeatable?: boolean
+  condition?: Condition
+  /** When condition met, automatically start this dialogue (if no other dialogue running). Default: `false` */
+  autoStart?: boolean
+  /** If > 0, this dialogue will automatically advance using the value of `autoAdvance` (in seconds) as interval, until when player interaction is needed. Player can click continue button to show next node immediately. */
+  autoAdvance?: number
 }
 
 type DialogueNodeType = 'message' | 'choice' | 'input' | 'router'
@@ -114,7 +120,9 @@ export interface InputDialogNode extends BasicDialogueNode<'input'> {
   value?: string
   /** Determines which character replied. If omitted, the first character with tag `player` in character list will be used. */
   as?: string
-  /** If user input matches the keywords, jump to a node. */
+  /** When input does not match any keywords, this is the default reply. */
+  next?: string
+  /** If user input matches the keywords, jump to a node. Keywords beginning with `translate:` use the current translation, or the key without that prefix if missing. */
   gates?: {
     keywords: string[]
     target: string

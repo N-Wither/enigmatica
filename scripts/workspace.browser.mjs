@@ -87,6 +87,36 @@ async function withinBounds() {
     });
   })()`)
 }
+async function stableChatLayout(mode) {
+  const result = await evaluate(`(async () => {
+    const measure = () => {
+      const nav = chat.shadowRoot.querySelector('[part=character-list]');
+      const panel = chat.shadowRoot.querySelector('[part=chat-panel-wrapper]');
+      const size = element => ({width:element.offsetWidth, height:element.offsetHeight});
+      const messages = [...chat.shadowRoot.querySelectorAll('eg-dialognode')]
+        .map(node => node.shadowRoot.querySelector('[part=message]')).filter(Boolean);
+      return {drawer:size(drawer), chat:size(chat), nav:size(nav), panel:size(panel),
+        messages:messages.map(size),
+        noHorizontalOverflow:[drawer,chat,nav,panel].every(element => element.scrollWidth <= element.clientWidth),
+        pageFits:document.documentElement.scrollWidth <= innerWidth};
+    };
+    const before = measure(), samples = [];
+    for (let i = 0; i < 2; i++) {
+      toggle.click(); await app.updateComplete;
+      samples.push(measure());
+      await new Promise(resolve => setTimeout(resolve, 70));
+      samples.push(measure());
+      await Promise.all(app.shadowRoot.getAnimations({subtree:true}).map(animation => animation.finished.catch(() => {})));
+    }
+    return {before, samples, after:measure()};
+  })()`)
+  assert.equal(result.before.noHorizontalOverflow, true, mode + ' starts without horizontal scrolling')
+  assert.equal(result.before.pageFits, true)
+  for (const sample of [...result.samples, result.after]) {
+    assert.deepEqual(sample, result.before, mode + ' keeps chat and message layout throughout close/open')
+  }
+}
+
 async function screenshot(name) {
   if (!process.env.BROWSER_SCREENSHOT_DIR) return
   await mkdir(process.env.BROWSER_SCREENSHOT_DIR, { recursive: true })
@@ -113,6 +143,8 @@ try {
   await command('Page.enable')
   await eventually(() => evaluate(`!!document.querySelector('eg-worktable')?.engine && !!document.querySelector('eg-worktable')?.shadowRoot`))
   await execute(`window.app = document.querySelector('enigmatica-game'); window.table = app.querySelector('eg-worktable'); window.inventory = app.querySelector('eg-inventory'); window.chat = app.querySelector('eg-chat'); window.drawer = app.shadowRoot.querySelector('dialog'); window.toggle = app.shadowRoot.querySelector('[part=chat-toggle]');`)
+  // Keep workspace tests independent of the demo game's evolving initial inventory.
+  await execute("app.engine = new app.engine.constructor({characters:[{id:'guide',name:'Guide'}]}, {unlockedCharacters:['guide'],inventory:[{id:'notepad',count:1},{id:'docfile',count:1,state:{content:'Workspace document'}}]});")
   await viewport(1440, 900)
   assert.equal(await evaluate(`table.openItems.length`), 0)
   assert.equal(await evaluate(`drawer.open && !drawer.matches(':modal')`), true)
@@ -304,7 +336,7 @@ try {
         count:nodes.length,
         npcLeft:rect(npc.querySelector('[part=avatar]')).right <= rect(npc.querySelector('[part=message]')).left,
         playerRight:rect(avatar).left >= rect(bubble).right && Math.abs(rect(avatar).right - rect(row).right) < 1,
-        rightName:getComputedStyle(player.querySelector('[part=speaker]')).textAlign === 'right',
+        rightName:['right', 'end'].includes(getComputedStyle(player.querySelector('[part=speaker]')).textAlign),
         normalText:getComputedStyle(player.querySelector('[part=content]')).direction === 'ltr',
         noAvatar:!noAvatar.querySelector('[part=avatar]') && Math.abs(rect(noAvatar.querySelector('[part=message]')).right - rect(noAvatar.querySelector('[part=wrapper]')).right) < 1,
         unknown:!nodes[3].isPlayer && !nodes[3].shadowRoot.querySelector('[part=avatar]'),
@@ -317,10 +349,12 @@ try {
   const expectedGeometry = { count: 6, npcLeft: true, playerRight: true, rightName: true, normalText: true,
     noAvatar: true, unknown: true, caseSensitive: true, fits: true, noDuplicate: true }
   assert.deepEqual(await chatGeometry(), expectedGeometry)
+  await stableChatLayout('desktop')
   await screenshot('player-messages-desktop')
   await viewport(390, 844)
   await click('toggle')
   assert.deepEqual(await chatGeometry(), expectedGeometry)
+  await stableChatLayout('compact')
   await screenshot('player-messages-compact')
   await execute(`app.engine = new playerChat.constructor({characters:[{id:'guide',name:'Guide'},
     {id:'player',name:'Player',tags:['player'],avatars:{default:'image/avatars/default.png'}}],
@@ -422,6 +456,40 @@ try {
   await execute(`window.oldEngine = app.engine; app.engine = new oldEngine.constructor({}, {inventory:[{id:'notepad',count:1}]});`)
   await settle()
   assert.equal(await evaluate(`table.engine === app.engine && inventory.engine === app.engine && chat.engine === app.engine && table.openItems.length === 0 && table.shadowRoot.querySelectorAll('.window').length === 0`), true)
+  // Interactive item edits update saved state and restore into the actual textarea.
+  await execute("window.syncItem = app.engine.inventory.toArray()[0]; table.toggleItem(syncItem); syncItem.setState('content', 'Programmatic value');")
+  await settle()
+  assert.equal(await evaluate("syncItem.element.shadowRoot.querySelector('textarea').value"), 'Programmatic value')
+  await execute("window.syncSnapshots = []; app.engine.subscribe(state => syncSnapshots.push(state)); const textarea = syncItem.element.shadowRoot.querySelector('textarea'); textarea.value = 'Saved edit / 已保存'; textarea.dispatchEvent(new Event('change', {bubbles:true}));")
+  await settle()
+  assert.equal(await evaluate('app.engine.state.inventory[0].state.content'), 'Saved edit / 已保存')
+  assert.equal(await evaluate('syncSnapshots.length'), 1)
+  await execute("window.syncSaved = app.engine.state; app.engine = new app.engine.constructor({}, syncSaved);")
+  await settle()
+  await execute('window.restoredNote = app.engine.inventory.toArray()[0]; table.toggleItem(restoredNote);')
+  await settle()
+  assert.equal(await evaluate("restoredNote.element.shadowRoot.querySelector('textarea').value"), 'Saved edit / 已保存')
+  console.log('PASS item change events, programmatic content, single saved-state notification and restored textarea')
+
+  // Auto-start and auto-advance continue while chat is closed and another contact is selected.
+  if (await evaluate('drawer.open')) await click('toggle')
+  await execute("app.engine = new app.engine.constructor({characters:[{id:'guide',name:'Guide'},{id:'other',name:'Other'}], dialogues:[{id:'automatic',name:'Automatic',characterId:'guide',startNode:'hello',autoStart:true,autoAdvance:0.03,nodes:{hello:{speaker:'guide',text:'Background',next:'choose'},choose:{type:'choice',options:[{id:'go',text:'Go',next:'ask'}]},ask:{type:'input',next:'end'},end:{speaker:'guide',text:'Done'}}}]},{unlockedCharacters:['guide','other']}); chat.currentCharacter = 'other';")
+  await settle()
+  await eventually(async () => await evaluate("app.engine.state.dialogue?.currentNode === 'choose'"))
+  assert.equal(await evaluate('drawer.open'), false)
+  assert.equal(await evaluate('chat.currentCharacter'), 'other')
+  await delay(80)
+  assert.equal(await evaluate('app.engine.state.dialogue.currentNode'), 'choose')
+  await execute("chat.currentCharacter = 'guide'")
+  await click('toggle')
+  await click("activeReply().shadowRoot.querySelector('[part=option]')")
+  await delay(80)
+  assert.equal(await evaluate('app.engine.state.dialogue.currentNode'), 'ask')
+  await execute("activeReply().shadowRoot.querySelector('input').value = 'Continue'")
+  await click("activeReply().shadowRoot.querySelector('button[type=submit]')")
+  await eventually(async () => await evaluate('app.engine.state.dialogue === null'))
+  assert.equal(await evaluate('app.engine.state.completedDialogues.length'), 1)
+  console.log('PASS background auto dialogue, contact preservation, choice/input waiting and terminal auto completion')
   assert.deepEqual(errors, [])
   console.log('PASS actual Shadow DOM events, inventory identity/removal, disabled items, engine replacement; no browser exceptions')
 } finally {

@@ -27,11 +27,13 @@ export class EnigmaticaGameElement extends LitElement {
     * { box-sizing: border-box; }
     .toolbar { display: flex; align-items: center; gap: 1rem; padding: .5rem .75rem; border-bottom: 1px solid #d8dfe9; background: #fff; }
     .brand { font-weight: 700; }
-    button[part=chat-toggle] { grid-area: button; display: flex; align-items: center; justify-content: center; font: inherit; color: inherit; cursor: pointer; padding: .5rem .75rem; background: white; border: none; border-inline-end: 1px solid #ccd5e3; height: 100%; }
+    button[part=chat-toggle] { grid-area: button; display: flex; align-items: center; justify-content: center; font: inherit; color: inherit; cursor: pointer; padding: .5rem .75rem; background: white; border: none; border-inline-end: 1px solid #ccd5e3; height: 100%; transition: 0.2s; }
     button[part=chat-toggle]:focus-visible { outline: 2px solid #365fa4; outline-offset: 2px; }
-    main { display: grid; flex: 1; min-height: 0; min-width: 0; grid-template-columns: 36% var(--chat-toggle-button-width) minmax(0, 1fr); grid-template-rows: minmax(0, 3fr) minmax(0, 1fr); grid-template-areas: 'chat button worktable' 'chat button inventory'; }
+    button[part=chat-toggle]:is(:hover, :focus) { background-color: #e4e7f3; }
+    main { container-type: inline-size; display: grid; flex: 1; min-height: 0; min-width: 0; grid-template-columns: 36% var(--chat-toggle-button-width) minmax(0, 1fr); grid-template-rows: minmax(0, 3fr) minmax(0, 1fr); grid-template-areas: 'chat button worktable' 'chat button inventory'; }
     main.collapsed, main.compact { grid-template-columns: 0% var(--chat-toggle-button-width) minmax(0, 1fr); }
-    dialog { position: relative; inset: auto; display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; max-width: none; max-height: none; padding: 0; margin: 0; color: inherit; border: 0; border-right: 1px solid #d8dfe9; background: white; }
+    /* Keep desktop content at its expanded width while the grid track clips it. */
+    dialog { position: relative; inset: auto; display: flex; flex-shrink: 0; flex-direction: column; width: 36cqw; height: 100%; min-width: 0; min-height: 0; max-width: none; max-height: none; padding: 0; margin: 0; overflow: hidden; color: inherit; border: 0; border-right: 1px solid #d8dfe9; background: white; }
     dialog:not([open]) { display: none; }
     .chat-header { display: flex; align-items: center; justify-content: space-between; padding: .5rem .75rem; border-bottom: 1px solid #d8dfe9; }
     .chat-body { flex: 1; min-height: 0; overflow: hidden; }
@@ -293,7 +295,7 @@ export class EnigmaticaGameElement extends LitElement {
     const item = path.find((element): element is GameItemElement => element instanceof GameItemElement)
     const instance = this.engine.inventory.toArray().find(instance => instance.element && path.includes(instance.element))
     const target = typeof ev.details.target === 'string' ? ev.details.target : instance?.id || item?.id || undefined
-    this.engine.dispatchAction({ name: ev.details.name, target, details: { ...ev.details } })
+    this.engine.dispatchAction({ name: ev.details.name, target, details: { ...ev.details } }, instance)
   }
 }
 
